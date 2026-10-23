@@ -19,7 +19,7 @@
  * Run from the repository root, after `npm ci --prefix tests` and
  * `npx --prefix tests playwright install chromium`:
  *   node --test --test-concurrency=1 "tests/browser/*.test.js"
- * or from anywhere:
+ * or, also from the repository root, through the package script:
  *   npm --prefix tests run test:browser
  */
 'use strict';
