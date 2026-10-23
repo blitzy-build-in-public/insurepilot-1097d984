@@ -4,9 +4,14 @@
  * and formatDate must give the same en-US text whatever the zone.
  *
  * Each zone group assigns process.env.TZ, which Node applies to the local
- * Date getters at once. node --test runs every test file in its own
+ * Date getters at once, and then evaluates app.js afresh: an
+ * Intl.DateTimeFormat fixes its time zone when it is built, and app.js
+ * builds its display formatter once, at evaluation, so only an evaluation
+ * made after the zone is set shows whether the display depends on the zone.
+ * The cross-zone comparison evaluates app.js in each zone itself, so it
+ * holds when run alone. node --test runs every test file in its own
  * process, so the setting cannot reach another file; it is still restored
- * after each group and checked at the end.
+ * after each group and after the comparison, and checked at the end.
  *
  * Run from the repository root:
  *   node --test "tests/unit/date-format.test.js"
@@ -15,7 +20,6 @@
 
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { model } = require('../support/load-app.js');
 
 /** The process's TZ at load; undefined when it was not set. */
 const ORIGINAL_TZ = process.env.TZ;
@@ -91,13 +95,6 @@ const FORMAT_CASES = Object.freeze([
 ]);
 
 /**
- * Each zone's formatDate outputs, in FORMAT_CASES order, for the final
- * cross-zone comparison.
- * @type {!Map<string, !Array<string>>}
- */
-const formatOutputsByZone = new Map();
-
-/**
  * Puts process.env.TZ back as it was at load, deleting it when it was unset,
  * since assigning undefined would store the string 'undefined'.
  */
@@ -107,6 +104,18 @@ function restoreTz() {
   } else {
     process.env.TZ = ORIGINAL_TZ;
   }
+}
+
+/**
+ * Evaluates app.js afresh and returns its model. The display formatter is
+ * built when app.js is evaluated and keeps the time zone in force then, so
+ * each zone needs its own evaluation after process.env.TZ is set: the cached
+ * loader would keep formatting in the zone the first evaluation saw.
+ * @returns {!Object} PlantModel from a new evaluation of app.js.
+ */
+function loadFreshModel() {
+  delete require.cache[require.resolve('../support/load-app.js')];
+  return require('../support/load-app.js').model;
 }
 
 /**
@@ -130,11 +139,12 @@ test('each instant falls on a non-UTC day in at least one zone', () => {
 
 for (const { zone, offsetAtA, localDates } of ZONES) {
   describe(zone, () => {
-    const outputs = [];
+    /** This zone's model, evaluated after the zone is set. */
+    let model;
 
     before(() => {
       process.env.TZ = zone;
-      formatOutputsByZone.set(zone, outputs);
+      model = loadFreshModel();
     });
     after(restoreTz);
 
@@ -166,23 +176,32 @@ for (const { zone, offsetAtA, localDates } of ZONES) {
       assert.equal(model.toLocalDateString(date), '2025-01-05');
     });
 
-    FORMAT_CASES.forEach(({ input, expected }, index) => {
+    FORMAT_CASES.forEach(({ input, expected }) => {
       test(`formatDate('${input}') is '${expected}'`, () => {
-        const result = model.formatDate(input);
-        outputs[index] = result;
-        assert.equal(result, expected);
+        assert.equal(model.formatDate(input), expected);
       });
     });
   });
 }
 
 test('formatDate gives identical output in all five zones', () => {
+  const outputsByZone = new Map();
+  try {
+    for (const { zone } of ZONES) {
+      process.env.TZ = zone;
+      const zoneModel = loadFreshModel();
+      outputsByZone.set(
+          zone, FORMAT_CASES.map(({ input }) => zoneModel.formatDate(input)));
+    }
+  } finally {
+    restoreTz();
+  }
   assert.deepEqual(
-      [...formatOutputsByZone.keys()], ZONES.map(({ zone }) => zone));
-  const [first, ...others] = [...formatOutputsByZone.values()];
-  assert.equal(first.length, FORMAT_CASES.length);
-  for (const outputs of others) {
-    assert.deepEqual(outputs, first);
+      [...outputsByZone.keys()], ZONES.map(({ zone }) => zone));
+  const [[firstZone, first], ...others] = outputsByZone;
+  assert.deepEqual(first, FORMAT_CASES.map(({ expected }) => expected));
+  for (const [zone, outputs] of others) {
+    assert.deepEqual(outputs, first, `${zone} differs from ${firstZone}`);
   }
 });
 

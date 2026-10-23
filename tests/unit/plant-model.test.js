@@ -107,7 +107,7 @@ describe('loading app.js in Node.js', () => {
   });
 
   test('exports exactly model and storage', () => {
-    assert.deepEqual(Object.keys(loadApp()), ['model', 'storage']);
+    assert.deepEqual(Object.keys(loadApp()).sort(), ['model', 'storage']);
   });
 
   test('defines no DOM', () => {
