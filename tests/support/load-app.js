@@ -70,6 +70,9 @@ function loadApp() {
   return exported;
 }
 
-// The require cache evaluates app.js once per process; node --test gives
-// each test file its own process, so every file gets a fresh evaluation.
+// app.js is evaluated once per cached load: later requires in the process
+// get the cached export, and deleting this module's require-cache entry
+// makes the next require evaluate app.js again, as the per-zone reload in
+// date-format.test.js does. node --test gives each test file its own
+// process, so every file still gets a fresh first evaluation.
 module.exports = loadApp();

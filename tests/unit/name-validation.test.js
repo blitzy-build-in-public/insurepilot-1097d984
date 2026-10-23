@@ -20,10 +20,8 @@ const { MESSAGES } = model;
  */
 const HERB = '🌿';
 
-/** The result validateName returns for a missing name. */
 const NAME_REQUIRED = { ok: false, message: 'Enter a plant name' };
 
-/** The result validateName returns for a name over the limit. */
 const NAME_TOO_LONG = {
   ok: false,
   message: 'Name must be 80 characters or fewer',

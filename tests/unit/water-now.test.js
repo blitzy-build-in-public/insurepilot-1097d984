@@ -16,9 +16,13 @@ const { model } = require('../support/load-app.js');
 const TODAY = '2025-03-06';
 
 /**
- * Freezes a value and every object it holds, at any depth.
- * @param {*} value Any value; primitives are returned as they are.
- * @returns {*} the same value, frozen recursively.
+ * Freezes an acyclic array or plain record, such as the plant lists here,
+ * and, recursively, every non-function object among its own enumerable
+ * string-keyed values.
+ * @param {*} value An acyclic array or plain record; primitives are returned
+ *     as they are.
+ * @returns {*} the same value, frozen recursively through its own enumerable
+ *     string-keyed values.
  */
 function deepFreeze(value) {
   if (typeof value === 'object' && value !== null) {

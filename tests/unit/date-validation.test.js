@@ -16,13 +16,10 @@ const { model } = require('../support/load-app.js');
 /** Today for every validateDate call; the real clock is never read. */
 const TODAY = '2025-03-06';
 
-/** The canonical stored form: exactly four year digits. */
 const CANONICAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** validateDate's result for an empty, incomplete or non-existent date. */
 const DATE_REQUIRED = { ok: false, message: 'Enter a date' };
 
-/** validateDate's result for a date later than today. */
 const DATE_IN_FUTURE = { ok: false, message: 'Date cannot be in the future' };
 
 /**

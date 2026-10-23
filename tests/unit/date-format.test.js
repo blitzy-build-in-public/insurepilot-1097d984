@@ -21,7 +21,6 @@
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
-/** The process's TZ at load; undefined when it was not set. */
 const ORIGINAL_TZ = process.env.TZ;
 
 /**
@@ -79,13 +78,12 @@ const ZONES = Object.freeze([
   },
 ]);
 
-/** formatDate inputs and the display text each must give in every zone. */
 const FORMAT_CASES = Object.freeze([
   { input: '2025-03-03', expected: 'Mar 3, 2025' },
   { input: '2025-12-31', expected: 'Dec 31, 2025' },
   { input: '2024-02-29', expected: 'Feb 29, 2024' },
-  // Los Angeles springs forward on this day, so a Date built at local
-  // midnight could land on another day.
+  // Los Angeles changes UTC offset on this date; the displayed calendar
+  // day must remain March 9 in every zone.
   { input: '2025-03-09', expected: 'Mar 9, 2025' },
   // Not calendar dates: returned unchanged, so rendering never fails.
   { input: 'x', expected: 'x' },
@@ -107,10 +105,12 @@ function restoreTz() {
 }
 
 /**
- * Evaluates app.js afresh and returns its model. The display formatter is
- * built when app.js is evaluated and keeps the time zone in force then, so
- * each zone needs its own evaluation after process.env.TZ is set: the cached
- * loader would keep formatting in the zone the first evaluation saw.
+ * Evaluates app.js afresh and returns its model. app.js builds its display
+ * formatter once, at evaluation, pinned to UTC; a formatter built without
+ * that option would take the time zone in force at evaluation. Evaluating
+ * afresh after each process.env.TZ assignment makes the loss of that option
+ * observable: the cached loader would keep the first zone's formatter, and
+ * the cross-zone comparison could not tell.
  * @returns {!Object} PlantModel from a new evaluation of app.js.
  */
 function loadFreshModel() {
