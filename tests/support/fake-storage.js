@@ -18,10 +18,11 @@ const FAKE_STORAGE_OPTIONS = Object.freeze(['initial', 'failWrites']);
 
 /**
  * Creates a Map-backed stand-in for a Storage area.
- * @param {{initial: (string|undefined), failWrites: (boolean|undefined)}=}
- *     options `initial` seeds the plant key, which stays absent while it is
- *     undefined (an empty string is seeded); `failWrites` makes every
- *     setItem throw a QuotaExceededError.
+ * @param {{initial: *, failWrites: (boolean|undefined)}=} options
+ *     `initial` seeds the plant key, which stays absent while `initial` is
+ *     undefined; any other value, an empty string included, is stored as
+ *     String(initial), as Web Storage setItem converts its value to a
+ *     string. `failWrites` makes every setItem throw a QuotaExceededError.
  * @returns {{getItem: function(string): ?string,
  *     setItem: function(string, string): void,
  *     removeItem: function(string): void,
