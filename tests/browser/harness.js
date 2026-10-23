@@ -173,32 +173,123 @@ function startServer() {
 }
 
 /**
+ * Names a value in an error message without serialising it: a string is
+ * shown quoted, anything else by its type.
+ * @param {*} value The value.
+ * @returns {string} The description.
+ */
+function describeValue(value) {
+  if (typeof value === 'string') {
+    return JSON.stringify(value);
+  }
+  return value === null ? 'null' : typeof value;
+}
+
+/**
+ * Finds the RUNS entry a run spec names and checks the spec agrees with it
+ * in mode and in both viewport dimensions, so no evidence can carry one
+ * run's label while the page ran in another mode or size.
+ * @param {*} run The run spec, normally an entry of RUNS.
+ * @returns {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} The frozen RUNS entry,
+ *     whose viewport is the one every context uses.
+ * @throws {TypeError} When `run` is not an object, its `name` is not a
+ *     RUNS name, or its `mode` or `viewport` differs from that entry's.
+ */
+function canonicalRun(run) {
+  if (run === null || typeof run !== 'object') {
+    throw new TypeError(
+        `A run must be a RUNS entry, not ${describeValue(run)}`);
+  }
+  const entry = RUNS.find((candidate) => candidate.name === run.name);
+  if (entry === undefined) {
+    throw new TypeError(
+        `Unknown run name ${describeValue(run.name)}; expected one of ` +
+        `${RUNS.map((candidate) => candidate.name).join(', ')}`);
+  }
+  if (run.mode !== entry.mode) {
+    throw new TypeError(
+        `Run ${entry.name} must have mode '${entry.mode}', not ` +
+        `${describeValue(run.mode)}`);
+  }
+  const { width, height } = entry.viewport;
+  const viewport = run.viewport;
+  if (viewport === null || typeof viewport !== 'object' ||
+      viewport.width !== width || viewport.height !== height) {
+    throw new TypeError(
+        `Run ${entry.name} must have viewport ${width}x${height}`);
+  }
+  return entry;
+}
+
+/**
+ * The hostnames, as URL parses them, of the loopback addresses a served
+ * run may use: startStaticServer's default 127.0.0.1, and ::1, which it
+ * reports bracketed.
+ * @const {!ReadonlyArray<string>}
+ */
+const LOOPBACK_HOSTNAMES = Object.freeze(['127.0.0.1', '[::1]']);
+
+/**
+ * Checks that a served base is a static-server origin on this machine,
+ * exactly as startStaticServer reports it: `http://<loopback>:<port>` with
+ * no credentials, path, trailing slash, query or fragment.
+ * @param {*} base The server's `url`.
+ * @returns {string} The base, unchanged.
+ * @throws {TypeError} When `base` is not such an origin.
+ */
+function servedOrigin(base) {
+  const parsed =
+      typeof base === 'string' && URL.canParse(base) ? new URL(base) : null;
+  if (parsed === null || parsed.protocol !== 'http:' ||
+      !LOOPBACK_HOSTNAMES.includes(parsed.hostname) || parsed.port === '' ||
+      parsed.username !== '' || parsed.password !== '' ||
+      parsed.origin !== base) {
+    throw new TypeError(
+        'A served base must be http://127.0.0.1:<port> or ' +
+        'http://[::1]:<port> with nothing after the port, not ' +
+        `${describeValue(base)}`);
+  }
+  return base;
+}
+
+/**
  * Builds the URL of one of the page's own files for a run.
- * @param {{mode: string}} run The run.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
  * @param {?{url: string}|undefined} server The static server; required in
- *     served mode.
- * @param {string} name A file name directly in the repository root.
- * @returns {string} A file: URL in file mode, or the server's URL.
+ *     served mode, where its `url` must pass servedOrigin. Ignored in file
+ *     mode.
+ * @param {string} name One of APP_FILES.
+ * @returns {string} A file: URL in file mode, or `<server url>/<name>`.
+ * @throws {TypeError} When the run is invalid, `name` is not one of the
+ *     page's own files, or a served run has no valid server.
  */
 function fileUrl(run, server, name) {
-  if (run.mode === 'file') {
+  const entry = canonicalRun(run);
+  if (!APP_FILES.includes(name)) {
+    throw new TypeError(
+        `Not one of the page's own files: ${describeValue(name)}`);
+  }
+  if (entry.mode === 'file') {
     return pathToFileURL(path.join(ROOT, name)).href;
   }
-  if (run.mode === 'served') {
-    if (!server || typeof server.url !== 'string') {
-      throw new TypeError(`Run ${run.name} is served but has no server`);
-    }
-    return `${server.url}/${name}`;
+  if (!server || typeof server.url !== 'string') {
+    throw new TypeError(`Run ${entry.name} is served but has no server`);
   }
-  throw new TypeError(`Unknown run mode: ${run.mode}`);
+  return `${servedOrigin(server.url)}/${name}`;
 }
 
 /**
  * The page URL a run opens.
- * @param {{name: string, mode: string}} run The run.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
  * @param {?{url: string}=} server The static server; required in served
- *     mode.
+ *     mode, where its `url` must pass servedOrigin.
  * @returns {string} The file: URL of index.html, or `<server>/index.html`.
+ * @throws {TypeError} When the run or a served run's server is invalid.
  */
 function pageUrl(run, server) {
   return fileUrl(run, server, 'index.html');
@@ -207,13 +298,43 @@ function pageUrl(run, server) {
 /**
  * The three request URLs the network contract allows for a run, in load
  * order.
- * @param {{name: string, mode: string}} run The run.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
  * @param {?{url: string}=} server The static server; required in served
- *     mode.
+ *     mode, where its `url` must pass servedOrigin.
  * @returns {!Array<string>} The URLs of index.html, styles.css and app.js.
+ * @throws {TypeError} When the run or a served run's server is invalid.
  */
 function expectedFiles(run, server) {
   return APP_FILES.map((name) => fileUrl(run, server, name));
+}
+
+/**
+ * Checks a session's run and page URL before anything is allocated for
+ * it. The run must be a RUNS spec, and the URL exactly the page that run
+ * opens: index.html's file: URL in file mode, or `<origin>/index.html` on
+ * a loopback static-server origin that passes servedOrigin in served mode.
+ * @param {*} run The run spec.
+ * @param {*} url The page URL.
+ * @returns {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} The frozen RUNS entry.
+ * @throws {TypeError} When the run is invalid or the URL is not its page.
+ */
+function sessionRun(run, url) {
+  const entry = canonicalRun(run);
+  if (typeof url !== 'string' || !URL.canParse(url)) {
+    throw new TypeError(
+        `Run ${entry.name}: page URL ${describeValue(url)} is not a URL`);
+  }
+  const server =
+      entry.mode === 'served' ? { url: new URL(url).origin } : null;
+  const expected = pageUrl(entry, server);
+  if (url !== expected) {
+    throw new TypeError(
+        `Run ${entry.name} must open ${expected}, not ${describeValue(url)}`);
+  }
+  return entry;
 }
 
 // ===== Sessions, clock, failure listeners, network log =====
@@ -272,28 +393,76 @@ async function openSessionPage(session) {
 }
 
 /**
+ * Contexts whose Playwright `close` event has fired, which happens only once
+ * the browser has really shut the context down or has exited.
+ * @type {!WeakSet<!Object>}
+ */
+const closedContexts = new WeakSet();
+
+/**
+ * Starts tracking a new context's `close` event, so closeContext can confirm
+ * its shutdown. Called as soon as the context exists.
+ * @param {!Object} context A Playwright BrowserContext.
+ */
+function watchContextClose(context) {
+  context.once('close', () => {
+    closedContexts.add(context);
+  });
+}
+
+/**
+ * Closes a context and confirms that it really closed. After a close attempt
+ * has failed part-way, Playwright's `context.close()` resolves at once
+ * without closing anything, so a resolved close counts only when the
+ * context's `close` event has fired as well.
+ * @param {!Object} context A Playwright BrowserContext that was passed to
+ *     watchContextClose when it was created.
+ * @returns {!Promise<void>} Resolves once the context is closed; rejects
+ *     when the close fails or is unconfirmed, and the caller keeps the
+ *     context.
+ */
+async function closeContext(context) {
+  await context.close();
+  if (!closedContexts.has(context)) {
+    throw new Error(
+        'The browser context did not confirm that it closed, so it may ' +
+        'still be running');
+  }
+}
+
+/**
  * Creates a fresh, isolated context for one check, with the run's viewport,
  * the fixed time zone and clock and, optionally, blocked storage, all in
  * place before any page opens. A fresh context starts with empty storage.
  * @param {!Object} browser A Playwright Browser.
  * @param {{name: string, mode: string,
- *     viewport: {width: number, height: number}}} run The run.
- * @param {string} url The page URL to open.
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one in name, mode and viewport, whose
+ *     viewport the context gets. Any other value rejects with a TypeError
+ *     before a context opens.
+ * @param {string} url The page URL to open: exactly the run's pageUrl,
+ *     index.html's file: URL in file mode or `<loopback origin>/index.html`
+ *     in served mode. Any other value rejects with a TypeError before a
+ *     context opens.
  * @param {{now: (string|undefined), block: (boolean|undefined)}=} options
  *     `now` is the fixed clock as an ISO string, DEFAULT_NOW by default;
  *     `block` makes every read of window.localStorage throw.
  * @returns {!Promise<!Object>} The session: `context`, `run`, `url`,
  *     `failures`, `network`, `pages`, the mutable `phase` label ('load' by
- *     default) that tags each logged request, `openPage()` and an
- *     idempotent `close()`.
+ *     default) that tags each logged request, `openPage()` and `close()`.
+ *     Concurrent close() calls share one attempt, which resolves once the
+ *     context is confirmed closed, after which close() resolves at once. A
+ *     failed attempt rejects and keeps the context for the next close().
  */
 async function createSession(
     browser, run, url, { now = DEFAULT_NOW, block = false } = {}) {
+  const { viewport } = sessionRun(run, url);
   const context = await browser.newContext({
-    viewport: run.viewport,
+    viewport,
     timezoneId: TIMEZONE,
   });
-  let closed = false;
+  watchContextClose(context);
+  let closing = null;
   const session = {
     context,
     run,
@@ -304,12 +473,15 @@ async function createSession(
     phase: 'load',
     persistent: false,
     openPage: () => openSessionPage(session),
-    close: async () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      await context.close();
+    close: () => {
+      // Concurrent calls share one attempt. A failed attempt is cleared so
+      // the next call retries; a successful one is returned to every later
+      // call, which therefore does nothing.
+      closing = closing ?? closeContext(context).catch((err) => {
+        closing = null;
+        throw err;
+      });
+      return closing;
     },
   };
   try {
@@ -319,7 +491,9 @@ async function createSession(
     }
     attachNetworkLog(context, session);
   } catch (err) {
-    await session.close();
+    // The setup error is the one reported, so a failed close cannot mask
+    // it; the context then stays with the shared browser until that closes.
+    await Promise.allSettled([session.close()]);
     throw err;
   }
   return session;
@@ -329,22 +503,35 @@ async function createSession(
  * Launches Chromium on a persistent profile with the run's viewport, the
  * fixed time zone and clock, and the session's network log.
  * @param {string} profileDir The profile directory.
- * @param {{viewport: {width: number, height: number}}} run The run.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one, whose viewport the browser gets. Any
+ *     other value rejects with a TypeError before Chromium launches.
  * @param {string} now The fixed clock as an ISO string.
  * @param {!Object} session The session whose network log is attached.
- * @returns {!Promise<!Object>} The persistent BrowserContext.
+ * @returns {!Promise<!Object>} The persistent BrowserContext. A setup
+ *     failure rejects with its own error; a context that then fails to
+ *     close is left in `session.context` for the session's close() to retry.
  */
 async function launchPersistent(profileDir, run, now, session) {
   const context = await chromium.launchPersistentContext(profileDir, {
     ...LAUNCH_OPTIONS,
-    viewport: run.viewport,
+    viewport: canonicalRun(run).viewport,
     timezoneId: TIMEZONE,
   });
+  watchContextClose(context);
   try {
     await context.clock.setFixedTime(new Date(now));
     attachNetworkLog(context, session);
   } catch (err) {
-    await context.close();
+    // The setup error is the one reported. A context that fails to close
+    // passes to the session, whose close() retries it before removing the
+    // profile.
+    try {
+      await closeContext(context);
+    } catch {
+      session.context = context;
+    }
     throw err;
   }
   return context;
@@ -356,19 +543,33 @@ async function launchPersistent(profileDir, run, now, session) {
  * Pages are always opened with `openPage()`, never the launch's default
  * about:blank page, so the clock and listeners certainly apply.
  * @param {{name: string, mode: string,
- *     viewport: {width: number, height: number}}} run The run.
- * @param {string} url The page URL to open.
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one in name, mode and viewport, whose
+ *     viewport the browser gets. Any other value rejects with a TypeError
+ *     before the profile directory is created.
+ * @param {string} url The page URL to open: exactly the run's pageUrl,
+ *     index.html's file: URL in file mode or `<loopback origin>/index.html`
+ *     in served mode. Any other value rejects with a TypeError before the
+ *     profile directory is created.
  * @param {{now: (string|undefined)}=} options `now` is the fixed clock as
  *     an ISO string, DEFAULT_NOW by default; it is re-applied on relaunch.
  * @returns {!Promise<!Object>} The session: the same shape as
  *     createSession's, plus `profileDir` and `relaunch()`, which closes the
  *     browser gracefully (flushing storage to disk) and launches it again on
  *     the same profile with the same options. `context` always points at
- *     the current context. `close()` is idempotent and removes the profile.
+ *     the current context, and is replaced only once the previous one has
+ *     closed: a relaunch whose close fails rejects and keeps it. relaunch()
+ *     rejects on a closing, closed or relaunching session. `close()` lets a
+ *     relaunch in flight settle, closes the context, then removes the
+ *     profile. Concurrent calls share one attempt; a failed attempt rejects
+ *     and keeps the context and the profile for the next close() to retry,
+ *     and after a success close() resolves at once.
  */
 async function createPersistentSession(run, url, { now = DEFAULT_NOW } = {}) {
+  sessionRun(run, url);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plant-parent-'));
-  let closed = false;
+  let closing = null;
+  let relaunching = null;
   const session = {
     context: null,
     run,
@@ -381,32 +582,52 @@ async function createPersistentSession(run, url, { now = DEFAULT_NOW } = {}) {
     persistent: true,
     openPage: () => openSessionPage(session),
     relaunch: async () => {
-      const previous = session.context;
-      session.context = null;
-      if (previous) {
-        await previous.close();
+      if (closing !== null || relaunching !== null) {
+        throw new Error(
+            `${run.name}: a persistent session that is closing, closed or ` +
+            'already relaunching cannot relaunch');
       }
-      session.context = await launchPersistent(profileDir, run, now, session);
-    },
-    close: async () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      try {
+      relaunching = (async () => {
+        // The previous context stays in session.context until it has
+        // closed, so a failed close leaves it for close() to retry.
         if (session.context) {
-          await session.context.close();
+          await closeContext(session.context);
+          session.context = null;
         }
+        session.context = await launchPersistent(profileDir, run, now, session);
+      })();
+      try {
+        await relaunching;
       } finally {
-        session.context = null;
-        fs.rmSync(profileDir, { recursive: true, force: true });
+        relaunching = null;
       }
+    },
+    close: () => {
+      // Concurrent calls share one attempt. A failed attempt is cleared so
+      // the next call retries, keeping the context and the profile; a
+      // successful one is returned to every later call, which does nothing.
+      closing = closing ?? (async () => {
+        // A relaunch in flight settles first, so the context it leaves in
+        // session.context is the one closed here.
+        await Promise.allSettled([relaunching]);
+        if (session.context) {
+          await closeContext(session.context);
+          session.context = null;
+        }
+        fs.rmSync(profileDir, { recursive: true, force: true });
+      })().catch((err) => {
+        closing = null;
+        throw err;
+      });
+      return closing;
     },
   };
   try {
     session.context = await launchPersistent(profileDir, run, now, session);
   } catch (err) {
-    await session.close();
+    // The launch error is the one reported, so a failed close cannot mask
+    // it; the profile then stays on disk, as its browser may be running.
+    await Promise.allSettled([session.close()]);
     throw err;
   }
   return session;
@@ -427,12 +648,19 @@ function setClock(session, iso) {
 
 /**
  * Writes a raw string to the storage key on the already-open page, then
- * reloads, so the app loads it as saved data.
+ * reloads, so the app loads it as saved data. Malformed or wrong-shape
+ * storage is seeded here, already serialised.
  * @param {!Object} page A loaded Playwright Page.
  * @param {string} raw The exact value to store.
  * @returns {!Promise<void>} Resolves once the reloaded page has loaded.
+ *     Rejects with a TypeError, before the page is touched, when `raw` is
+ *     not a string, which Web Storage would otherwise coerce.
  */
 async function seedRaw(page, raw) {
+  if (typeof raw !== 'string') {
+    throw new TypeError(
+        `seedRaw needs a string, got ${raw === null ? 'null' : typeof raw}`);
+  }
   await page.evaluate(
       ([key, value]) => window.localStorage.setItem(key, value),
       [STORAGE_KEY, raw]);
@@ -440,12 +668,20 @@ async function seedRaw(page, raw) {
 }
 
 /**
- * Seeds plant records as JSON and reloads.
+ * Seeds an array of plant records as JSON and reloads. Any other stored
+ * shape goes through seedRaw as a string.
  * @param {!Object} page A loaded Playwright Page.
- * @param {*} records The value to store, usually an array of records.
+ * @param {!Array<*>} records The records to store, possibly none. Entries
+ *     are stored as given, valid or not.
  * @returns {!Promise<string>} The exact string stored, for raw comparisons.
+ *     Rejects with a TypeError, before the page is touched, when `records`
+ *     is not an array.
  */
 async function seedPlants(page, records) {
+  if (!Array.isArray(records)) {
+    const type = records === null ? 'null' : typeof records;
+    throw new TypeError(`seedPlants needs an array, got ${type}`);
+  }
   const raw = JSON.stringify(records);
   await seedRaw(page, raw);
   return raw;
@@ -512,16 +748,44 @@ function addPlantButton(page) {
 /**
  * Adds plants through the form, one at a time. Each add must append
  * exactly one row, so a refused add fails here rather than in a later
- * assertion.
+ * assertion. Every item's types are checked before the first fill; the
+ * values themselves are left to the app's own validation.
  * @param {!Object} page A loaded Playwright Page.
  * @param {!Array<{name: string, date: (string|undefined)}>} items The
- *     plants. `date` is filled as `YYYY-MM-DD` (or '') when given, which
- *     marks the date as edited; otherwise the field keeps today's default.
- * @returns {!Promise<void>} Resolves once every plant is listed.
+ *     plants, possibly none. `date` is filled as `YYYY-MM-DD` (or '') when
+ *     given, which marks the date as edited; otherwise the field keeps
+ *     today's default.
+ * @returns {!Promise<void>} Resolves once every plant is listed. Rejects
+ *     with a TypeError naming the item, before the page is touched, when
+ *     `items` is not an array or an item is not an object with a string
+ *     `name` and a string or undefined `date`.
  */
 async function addPlants(page, items) {
+  if (!Array.isArray(items)) {
+    const type = items === null ? 'null' : typeof items;
+    throw new TypeError(`addPlants needs an array, got ${type}`);
+  }
+  const plants = [];
+  for (const [index, item] of items.entries()) {
+    if (typeof item !== 'object' || item === null) {
+      const type = item === null ? 'null' : typeof item;
+      throw new TypeError(`addPlants item ${index} is ${type}, not an object`);
+    }
+    const { name, date } = item;
+    if (typeof name !== 'string') {
+      throw new TypeError(
+          `addPlants item ${index} name is ${typeof name}, not a string`);
+    }
+    if (date !== undefined && typeof date !== 'string') {
+      const type = date === null ? 'null' : typeof date;
+      throw new TypeError(
+          `addPlants item ${index} date is ${type}, not a string or ` +
+          'undefined');
+    }
+    plants.push({ name, date });
+  }
   const rows = page.locator(ROW_SELECTOR);
-  for (const { name, date } of items) {
+  for (const { name, date } of plants) {
     const before = await rows.count();
     await page.fill('#plant-name', name);
     if (date !== undefined) {
@@ -782,12 +1046,97 @@ function resetEvidence() {
 }
 
 /**
- * Creates a run's evidence folder if needed.
- * @param {{name: string}} run The run.
+ * One safe file-name segment for a check id or screenshot suffix: a letter
+ * or digit, then letters, digits, '_' or '-'. It cannot be empty, name a
+ * directory or climb out of one.
+ * @const {!RegExp}
+ */
+const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/**
+ * Checks that a check id or screenshot suffix is one safe file-name
+ * segment, so it can name evidence without leaving its run folder.
+ * @param {*} value The id or suffix.
+ * @param {string} label What the value is, for the error message.
+ * @returns {string} The value, unchanged.
+ * @throws {TypeError} When the value is not a string matching
+ *     SEGMENT_PATTERN.
+ */
+function checkSegment(value, label) {
+  if (typeof value !== 'string' || !SEGMENT_PATTERN.test(value)) {
+    throw new TypeError(
+        `${label} must be letters, digits, '_' or '-', starting with a ` +
+        `letter or digit, not ${describeValue(value)}`);
+  }
+  return value;
+}
+
+/**
+ * Resolves a name inside a directory and checks that the result lies
+ * directly in it, so no name reaches a parent, a subfolder or an absolute
+ * path elsewhere. Nothing is created.
+ * @param {string} dir An absolute, normalised directory.
+ * @param {string} name The entry's name.
+ * @returns {string} The entry's absolute path.
+ * @throws {TypeError} When the resolved path is not directly in `dir`.
+ */
+function childPath(dir, name) {
+  const target = path.resolve(dir, name);
+  if (path.dirname(target) !== dir || path.basename(target) !== name) {
+    throw new TypeError(
+        `Evidence name ${describeValue(name)} is not directly in ${dir}`);
+  }
+  return target;
+}
+
+/**
+ * Resolves an artifact's path in a run's evidence folder, checking that
+ * the folder lies directly in tests/evidence/ and the artifact directly in
+ * the folder, and only then creates the folder if needed.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
+ * @param {string} name The artifact's file name.
+ * @returns {string} The absolute path of tests/evidence/<run>/<name>.
+ * @throws {TypeError} When the run is invalid or either path leaves its
+ *     directory; nothing is created.
+ */
+function evidenceFile(run, name) {
+  const dir = childPath(EVIDENCE_DIR, canonicalRun(run).name);
+  const file = childPath(dir, name);
+  fs.mkdirSync(dir, { recursive: true });
+  return file;
+}
+
+/**
+ * The file name of a check's screenshot: <check>.png for its main
+ * screenshot, or <check>-<suffix>.png for a sub-case.
+ * @param {string} check The check id, one safe file-name segment.
+ * @param {string|undefined} suffix The sub-case, one safe file-name
+ *     segment, or undefined for the main screenshot. An empty string is
+ *     invalid rather than another way to say "main".
+ * @returns {string} The file name.
+ * @throws {TypeError} When `check` or `suffix` is not a safe segment.
+ */
+function screenshotName(check, suffix) {
+  const id = checkSegment(check, 'Check id');
+  if (suffix === undefined) {
+    return `${id}.png`;
+  }
+  return `${id}-${checkSegment(suffix, 'Screenshot suffix')}.png`;
+}
+
+/**
+ * Creates a run's evidence folder if needed, after checking the run and
+ * that the folder lies directly in tests/evidence/.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
  * @returns {string} The absolute path of tests/evidence/<run>/.
+ * @throws {TypeError} When the run is invalid; nothing is created.
  */
 function runDir(run) {
-  const dir = path.join(EVIDENCE_DIR, run.name);
+  const dir = childPath(EVIDENCE_DIR, canonicalRun(run).name);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -796,43 +1145,62 @@ function runDir(run) {
  * Saves a screenshot as tests/evidence/<run>/<check>.png, or
  * <check>-<suffix>.png for a sub-case.
  * @param {!Object} page A Playwright Page.
- * @param {{name: string}} run The run.
- * @param {string} check The check id, such as 'C01'.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
+ * @param {string} check The check id, such as 'C01': one safe file-name
+ *     segment (SEGMENT_PATTERN).
  * @param {{suffix: (string|undefined), fullPage: (boolean|undefined)}=}
- *     options `suffix` names a sub-case; `fullPage` captures the whole page
+ *     options `suffix` names a sub-case and is a safe segment too; without
+ *     it the main <check>.png is written. `fullPage` captures the whole page
  *     instead of the viewport.
- * @returns {!Promise<string>} The screenshot's absolute path.
+ * @returns {!Promise<string>} The screenshot's absolute path. Rejects with
+ *     a TypeError, before any folder or file is created, when the run, id
+ *     or suffix is invalid.
  */
 async function takeScreenshot(
     page, run, check, { suffix, fullPage = false } = {}) {
-  const name = suffix ? `${check}-${suffix}.png` : `${check}.png`;
-  const file = path.join(runDir(run), name);
+  const file = evidenceFile(run, screenshotName(check, suffix));
   await page.screenshot({ path: file, fullPage });
   return file;
 }
 
 /**
  * Writes a run's network log as tests/evidence/<run>/network.json.
- * @param {{name: string}} run The run.
+ * @param {{name: string, mode: string,
+ *     viewport: {width: number, height: number}}} run The run: an entry of
+ *     RUNS, or a spec equal to one.
  * @param {*} data Any JSON-serialisable value.
  * @returns {string} The file's absolute path.
+ * @throws {TypeError} When the run is invalid; nothing is created.
  */
 function writeNetworkLog(run, data) {
-  const file = path.join(runDir(run), 'network.json');
+  const file = evidenceFile(run, 'network.json');
   fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
   return file;
 }
 
 /**
  * Records one check's outcome for one run.
- * @param {{check: string, run: {name: string}, observed: !Object,
+ * @param {{check: string, run: {name: string, mode: string,
+ *     viewport: {width: number, height: number}}, observed: !Object,
  *     pass: boolean, error: (?string|undefined)}} result The outcome;
- *     `error` is the failure message, absent or null on a pass.
+ *     `check` is one safe file-name segment, `run` an entry of RUNS or a
+ *     spec equal to one, and `error` the failure message, absent or null
+ *     on a pass.
  * @returns {{check: string, run: string, observed: !Object, pass: boolean,
  *     error: ?string}} The entry added to `results`.
+ * @throws {TypeError} When `check` or `run` is invalid; nothing is
+ *     recorded.
  */
 function recordResult({ check, run, observed, pass, error }) {
-  const entry = { check, run: run.name, observed, pass, error: error ?? null };
+  const entry = {
+    check: checkSegment(check, 'Check id'),
+    run: canonicalRun(run).name,
+    observed,
+    pass,
+    error: error ?? null,
+  };
   results.push(entry);
   return entry;
 }
@@ -911,31 +1279,74 @@ function collectFailures(ctx) {
 }
 
 /**
+ * Returns a thrown value or rejection reason as an Error, so that any value,
+ * null and undefined included, is reported and rethrown as a failure. An
+ * Error is returned unchanged; any other value becomes an Error that names
+ * it and keeps it as its `cause`.
+ * @param {*} reason The thrown value or rejection reason.
+ * @param {string} source What produced it, such as
+ *     'C01 file-360: the check threw'.
+ * @returns {!Error} The reason as an Error.
+ */
+function toCheckError(reason, source) {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  let text;
+  try {
+    text = typeof reason === 'string' ? JSON.stringify(reason) : String(reason);
+  } catch {
+    text = `a value of type ${typeof reason}`;
+  }
+  return new Error(`${source} a non-Error value: ${text}`, { cause: reason });
+}
+
+/**
  * Closes every session a check opened, attempting each even when one fails.
- * Persistent sessions also remove their profile directory.
+ * Persistent sessions also remove their profile directory. Whether a close
+ * failed is reported apart from its reason, because a reason can be any
+ * value, null and undefined included.
  * @param {{sessions: !Array<{close: function(): !Promise<void>}>}} ctx The
  *     check context.
- * @returns {!Promise<?Error>} The first close error, or null.
+ * @returns {!Promise<{failed: boolean, error: *}>} `failed` is true when any
+ *     session failed to close; `error` is then the first failure's reason,
+ *     as thrown, and is undefined otherwise.
  */
 async function closeSessions(ctx) {
-  let firstError = null;
+  let failed = false;
+  let error;
   for (const session of ctx.sessions) {
     try {
       await session.close();
     } catch (err) {
-      firstError = firstError ?? err;
+      if (!failed) {
+        failed = true;
+        error = err;
+      }
     }
   }
-  return firstError;
+  return { failed, error };
 }
 
 /**
  * Runs one check for one run. The body gets a context whose sessions are
- * tracked and closed afterwards. The check fails on any thrown error, on any
- * page error or console error or warning in its sessions, when no
- * <check>.png can be written, or when a session fails to close (which would
- * leave a browser or profile behind). Either way one results entry is
- * recorded, after the sessions are closed.
+ * tracked and closed afterwards. After the body, in order: <check>.png is
+ * written from the last open page unless the body wrote it, every session
+ * is closed, and only then are the page errors and console errors and
+ * warnings collected from every session into `observed.failures`, so those
+ * arriving during the screenshot or the teardown count too. The check fails
+ * when the body throws or rejects with any value, null and undefined
+ * included; when no <check>.png can be written; when a session fails to
+ * close (which would leave a browser or profile behind); or when that final
+ * failure list is not empty. The first of these, in that order, is the
+ * reported error, and a non-Error value is reported as an Error naming it,
+ * with the value as its `cause`. After a failed body the screenshot stays
+ * best effort. Either way one results entry is recorded, after the sessions
+ * are closed. An invalid spec is refused first: runCheck rejects with a
+ * TypeError, before the body runs, any context opens or any entry is
+ * recorded, when `check` is not one safe file-name segment
+ * (SEGMENT_PATTERN), `run` is not an entry of RUNS or a spec equal to one,
+ * or a served run's `server.url` does not pass servedOrigin.
  * @param {{check: string, run: {name: string, mode: string,
  *     viewport: {width: number, height: number}}, browser: !Object,
  *     server: ?Object}} spec The check id, the run, the shared browser and
@@ -948,6 +1359,8 @@ async function closeSessions(ctx) {
  *     the check's error otherwise.
  */
 async function runCheck({ check, run, browser, server }, body) {
+  checkSegment(check, 'Check id');
+  canonicalRun(run);
   const ctx = {
     check,
     run,
@@ -970,39 +1383,60 @@ async function runCheck({ check, run, browser, server }, body) {
     screenshot: async (page, options = {}) => {
       ctx.lastPage = page;
       const file = await takeScreenshot(page, run, check, options);
-      if (!options.suffix) {
+      // takeScreenshot writes <check>.png exactly when there is no suffix.
+      if (options.suffix === undefined) {
         ctx.mainScreenshot = true;
       }
       return file;
     },
   };
-  let failure = null;
+  // Whether the check failed is tracked apart from why, because a body can
+  // throw or reject with any value, null and undefined included.
+  let failed = false;
+  let failure;
   try {
     await body(ctx);
-    ctx.observed.failures = collectFailures(ctx);
-    assert.deepEqual(
-        ctx.observed.failures, [],
-        `${check} ${run.name}: the page reported errors or warnings`);
+  } catch (err) {
+    failed = true;
+    failure = toCheckError(err, `${check} ${run.name}: the check threw`);
+  }
+  try {
     await ensureCheckScreenshot(ctx);
   } catch (err) {
-    failure = err;
-    ctx.observed.failures = collectFailures(ctx);
-    try {
-      await ensureCheckScreenshot(ctx);
-    } catch {
-      // Best effort: the check's own error is the one to report.
+    // After a failed body the screenshot is best effort, and the body's own
+    // error stays the one reported.
+    if (!failed) {
+      failed = true;
+      failure = toCheckError(err, `${check} ${run.name}: the screenshot threw`);
     }
-  } finally {
-    const closeError = await closeSessions(ctx);
-    failure = failure ?? closeError;
   }
-  if (failure !== null) {
+  const closing = await closeSessions(ctx);
+  if (closing.failed && !failed) {
+    failed = true;
+    failure = toCheckError(
+        closing.error, `${check} ${run.name}: a session failed to close with`);
+  }
+  // Collected only once every session has closed, so a page error or console
+  // error or warning that arrived during the screenshot or the teardown is
+  // in the evidence and fails the check.
+  ctx.observed.failures = collectFailures(ctx);
+  if (!failed) {
+    try {
+      assert.deepEqual(
+          ctx.observed.failures, [],
+          `${check} ${run.name}: the page reported errors or warnings`);
+    } catch (err) {
+      failed = true;
+      failure = err;
+    }
+  }
+  if (failed) {
     recordResult({
       check,
       run,
       observed: ctx.observed,
       pass: false,
-      error: failure instanceof Error ? failure.message : String(failure),
+      error: failure.message,
     });
     throw failure;
   }
