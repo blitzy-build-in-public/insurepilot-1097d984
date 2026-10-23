@@ -453,6 +453,7 @@
   const WATER_LABEL = 'Water now';
   const WATER_NAME_PREFIX = 'Water now: ';
   const DATE_PREFIX = 'Last watered ';
+  const DATE_ID_PREFIX = 'plant-date-';
 
   /**
    * Creates an element with a class and optional text. Text is set as
@@ -498,12 +499,17 @@
     const doc = view.list.ownerDocument;
     const fragment = doc.createDocumentFragment();
     const buttons = new Map();
-    for (const plant of plants) {
+    for (const [index, plant] of plants.entries()) {
       const time = doc.createElement('time');
       time.setAttribute('datetime', plant.lastWatered);
       time.textContent = PlantModel.formatDate(plant.lastWatered);
       const date = createElement(doc, 'span', 'plant__date');
       date.append(doc.createTextNode(DATE_PREFIX), time);
+      // The date line describes the row's button, so a screen reader reads
+      // the new date when focus returns to that button after Water now. The
+      // id comes from the row index, never plant.id: a stored id is kept as
+      // found and may hold spaces, which would split the IDREF list.
+      date.id = DATE_ID_PREFIX + index;
 
       const text = createElement(doc, 'div', 'plant__text');
       text.append(createElement(doc, 'span', 'plant__name', plant.name), date);
@@ -515,6 +521,7 @@
       // "Water now : Monstera", with a stray space, in Chromium and Firefox.
       // This name is exact and begins with the visible label (WCAG 2.5.3).
       button.setAttribute('aria-label', WATER_NAME_PREFIX + plant.name);
+      button.setAttribute('aria-describedby', date.id);
 
       const row = createElement(doc, 'li', 'plant');
       row.append(text, button);
@@ -720,12 +727,18 @@
           { name: view.nameInput.value, lastWatered: view.dateInput.value },
           getToday());
       if (!result.ok) {
-        renderFieldErrors(view, result.errors);
-        if (result.errors.name) {
-          view.nameInput.focus();
-        } else {
-          view.dateInput.focus();
+        const firstInvalid =
+            result.errors.name ? view.nameInput : view.dateInput;
+        // Enter inside a field submits with that field still focused, and
+        // focus() on the focused element fires no focus event. Blurring it
+        // makes the focus move real, so a screen reader re-reads the field
+        // with its new message. The blur comes before the messages render,
+        // so a change event it commits cannot clear the one just shown.
+        if (firstInvalid === doc.activeElement) {
+          firstInvalid.blur();
         }
+        renderFieldErrors(view, result.errors);
+        firstInvalid.focus();
         return;
       }
       const usedIds = new Set(state.plants.map((plant) => plant.id));

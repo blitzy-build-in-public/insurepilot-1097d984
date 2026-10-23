@@ -879,10 +879,13 @@ async function submitForm(page) {
  * @param {!Object} page A loaded Playwright Page.
  * @returns {!Promise<!Array<{id: ?string, name: ?string, dateLine: ?string,
  *     dateText: ?string, datetime: ?string, buttonText: ?string,
- *     ariaLabel: ?string}>>} One entry per row. `id` is the button's
+ *     ariaLabel: ?string, describedBy: ?string,
+ *     describesOwnDate: boolean}>>} One entry per row. `id` is the button's
  *     data-plant-id; `dateLine` is the whitespace-normalised date line, such
  *     as "Last watered Mar 6, 2025"; `dateText` and `datetime` come from its
- *     <time> element.
+ *     <time> element. `describedBy` is the button's aria-describedby, and
+ *     `describesOwnDate` is whether that value, looked up as one id in the
+ *     document, finds this row's own date line.
  */
 function readRows(page) {
   return page.locator(ROW_SELECTOR).evaluateAll((rows) => rows.map((row) => {
@@ -890,6 +893,8 @@ function readRows(page) {
     const date = row.querySelector('.plant__date');
     const time = row.querySelector('.plant__date time');
     const button = row.querySelector('button.plant__water');
+    const describedBy =
+        button ? button.getAttribute('aria-describedby') : null;
     return {
       id: button ? button.getAttribute('data-plant-id') : null,
       name: name ? name.textContent : null,
@@ -898,6 +903,9 @@ function readRows(page) {
       datetime: time ? time.getAttribute('datetime') : null,
       buttonText: button ? button.textContent.trim() : null,
       ariaLabel: button ? button.getAttribute('aria-label') : null,
+      describedBy,
+      describesOwnDate: describedBy !== null && date !== null &&
+          document.getElementById(describedBy) === date,
     };
   }));
 }

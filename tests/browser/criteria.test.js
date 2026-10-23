@@ -51,6 +51,9 @@ const TEST_TIMEOUT = 60000;
 /** Most Tab or Shift+Tab presses a keyboard walk may take. */
 const MAX_FOCUS_PRESSES = 30;
 
+/** Each row's date-line id is this prefix followed by the row's index. */
+const DATE_ID_PREFIX = 'plant-date-';
+
 /** The three record keys, sorted, that every stored entry must carry. */
 const RECORD_KEYS = Object.freeze(['id', 'lastWatered', 'name']);
 
@@ -463,11 +466,13 @@ const DATE_FIELD = Object.freeze({
 
 /**
  * C09's refused submits, in the order they run in one session. A sub-case
- * without `date` leaves the date field at its default, today.
+ * without `date` leaves the date field at its default, today. `submitBy` is
+ * 'click' for a click on Add plant, or 'Enter' for Enter pressed inside the
+ * invalid field, which its fill left focused.
  * @const {!ReadonlyArray<{suffix: string, name: string,
  *     date: (string|undefined), field: !Object, other: !Object,
- *     message: string}>} `field` is the invalid field and `other` the
- *     valid one, each NAME_FIELD or DATE_FIELD.
+ *     message: string, submitBy: string}>} `field` is the invalid field and
+ *     `other` the valid one, each NAME_FIELD or DATE_FIELD.
  */
 const REFUSED_SUBMITS = Object.freeze([
   {
@@ -476,6 +481,7 @@ const REFUSED_SUBMITS = Object.freeze([
     field: NAME_FIELD,
     other: DATE_FIELD,
     message: T.nameRequired,
+    submitBy: 'click',
   },
   {
     suffix: 'b',
@@ -483,6 +489,7 @@ const REFUSED_SUBMITS = Object.freeze([
     field: NAME_FIELD,
     other: DATE_FIELD,
     message: T.nameRequired,
+    submitBy: 'Enter',
   },
   {
     suffix: 'c',
@@ -490,6 +497,7 @@ const REFUSED_SUBMITS = Object.freeze([
     field: NAME_FIELD,
     other: DATE_FIELD,
     message: T.nameTooLong,
+    submitBy: 'click',
   },
   {
     suffix: 'd',
@@ -498,6 +506,7 @@ const REFUSED_SUBMITS = Object.freeze([
     field: DATE_FIELD,
     other: NAME_FIELD,
     message: T.dateRequired,
+    submitBy: 'click',
   },
   {
     suffix: 'e',
@@ -506,27 +515,75 @@ const REFUSED_SUBMITS = Object.freeze([
     field: DATE_FIELD,
     other: NAME_FIELD,
     message: T.dateInFuture,
+    submitBy: 'Enter',
   },
 ]);
 
 /**
+ * Starts a page-side log of every focus event on Name and Last watered. A
+ * screen reader re-reads a field, with its new message, only when focus
+ * lands on it, and the active element alone cannot show whether focus
+ * landed or merely stayed. The listeners are the test's own; the app adds
+ * none.
+ * @param {!Object} page A loaded Playwright Page that is not reloaded while
+ *     the log is in use.
+ * @returns {!Promise<void>} Resolves once the listeners are attached.
+ */
+function logFieldFocus(page) {
+  return page.evaluate((selectors) => {
+    window.fieldFocusLog = [];
+    for (const selector of selectors) {
+      document.querySelector(selector).addEventListener('focus', () => {
+        window.fieldFocusLog.push(selector);
+      });
+    }
+  }, [NAME_FIELD.input, DATE_FIELD.input]);
+}
+
+/**
+ * Empties the focus log that logFieldFocus started.
+ * @param {!Object} page The page logFieldFocus was called on.
+ * @returns {!Promise<!Array<string>>} The fields focused since the last
+ *     call, in order, as activeElement descriptors such as '#plant-name'.
+ */
+function takeFieldFocus(page) {
+  return page.evaluate(() => window.fieldFocusLog.splice(0));
+}
+
+/**
  * C09: every invalid submit shows its exact message tied to its field,
- * moves focus there, adds no row, writes nothing and keeps the values as
+ * moves focus there with one focus event, even when Enter was pressed
+ * inside that field, adds no row, writes nothing and keeps the values as
  * typed.
  * @param {!Object} ctx The check context from runCheck.
  * @returns {!Promise<void>} Resolves when every assertion holds.
  */
 async function checkRefusedSubmits(ctx) {
   const { page } = await openFresh(ctx);
+  await logFieldFocus(page);
   ctx.observed.subCases = {};
   for (const subCase of REFUSED_SUBMITS) {
+    const label = `sub-case ${subCase.suffix}`;
     await page.fill('#plant-name', subCase.name);
     if (subCase.date !== undefined) {
       await page.fill('#last-watered', subCase.date);
     }
-    await h.submitForm(page);
+    const activeBefore = await h.activeElement(page);
+    await takeFieldFocus(page);
+    if (subCase.submitBy === 'Enter') {
+      assert.equal(
+          activeBefore, subCase.field.input,
+          `${label}: Enter is pressed inside the invalid field`);
+      await page.keyboard.press('Enter');
+    } else {
+      await h.submitForm(page);
+    }
+    const focusEvents = await takeFieldFocus(page);
     const fields = await h.readFields(page);
     const outcome = {
+      submitBy: subCase.submitBy,
+      activeBefore,
+      focusEvents,
       fields,
       rowCount: (await h.readRows(page)).length,
       raw: await h.readStored(page),
@@ -536,7 +593,6 @@ async function checkRefusedSubmits(ctx) {
     ctx.observed.subCases[subCase.suffix] = outcome;
     await ctx.screenshot(page, { suffix: subCase.suffix });
 
-    const label = `sub-case ${subCase.suffix}`;
     const shown = fields[subCase.field.error];
     const other = fields[subCase.other.error];
     assert.equal(shown.text, subCase.message, label);
@@ -558,6 +614,9 @@ async function checkRefusedSubmits(ctx) {
     assert.equal(
         fields.dateValue, subCase.date ?? TODAY, `${label}: date kept`);
     assert.equal(outcome.active, subCase.field.input, `${label}: focus`);
+    assert.deepEqual(
+        focusEvents, [subCase.field.input],
+        `${label}: one focus event, on the invalid field`);
   }
   await ctx.screenshot(page);
 }
@@ -1006,9 +1065,12 @@ async function checkNoOverflow(ctx) {
  * @param {string} name The plant name.
  * @param {string} key 'Enter' or 'Space'.
  * @returns {!Promise<{name: string, key: string, active: string,
- *     oldButtonConnected: boolean, row: ?Object,
+ *     oldButtonConnected: boolean, index: number, row: ?Object,
+ *     focusedByName: !Array<boolean>,
  *     outline: {outlineStyle: string, outlineWidth: string}}>} The plant's
- *     row and the focused element after the key.
+ *     row and its index (-1 when absent), the focused element after the
+ *     key, and one flag per button named exactly "Water now: <name>"
+ *     telling whether that button has focus.
  */
 async function activateByKey(page, name, key) {
   const handle = await h.waterButton(page, name).elementHandle();
@@ -1017,12 +1079,18 @@ async function activateByKey(page, name, key) {
     const oldButtonConnected =
         await handle.evaluate((button) => button.isConnected);
     const rows = await h.readRows(page);
+    const index = rows.findIndex((row) => row.name === name);
+    const focusedByName = await h.waterButton(page, name).evaluateAll(
+        (buttons) => buttons.map(
+            (button) => button === document.activeElement));
     return {
       name,
       key,
       active: await h.activeElement(page),
       oldButtonConnected,
-      row: rows.find((row) => row.name === name) ?? null,
+      index,
+      row: rows[index] ?? null,
+      focusedByName,
       outline: await h.focusOutline(page),
     };
   } finally {
@@ -1032,11 +1100,13 @@ async function activateByKey(page, name, key) {
 
 /**
  * Asserts one keyboard activation's outcome: the plant was watered, its
- * button was re-rendered and the new button holds a visible 3px focus ring.
+ * button was re-rendered, and the new button holds a visible 3px focus ring,
+ * keeps its exact name and is described by its own row's new date line.
  * @param {!Object} activation From activateByKey.
  * @param {string} id The plant's id.
+ * @param {number} index The plant's row index.
  */
-function assertActivation(activation, id) {
+function assertActivation(activation, id, index) {
   const label = `after ${activation.key} on ${activation.name}`;
   assert.equal(activation.row?.dateText, 'Mar 6, 2025', label);
   assert.equal(activation.active, `water:${id}`, `${label}: focus`);
@@ -1045,6 +1115,23 @@ function assertActivation(activation, id) {
   assert.deepEqual(
       activation.outline, { outlineStyle: 'solid', outlineWidth: '3px' },
       `${label}: focus outline`);
+  assert.equal(activation.index, index, `${label}: row index`);
+  assert.deepEqual(
+      activation.focusedByName, [true], `${label}: exact "Water now: <name>"`);
+  assert.deepEqual(
+      {
+        id: activation.row?.id,
+        describedBy: activation.row?.describedBy,
+        describesOwnDate: activation.row?.describesOwnDate,
+        dateLine: activation.row?.dateLine,
+      },
+      {
+        id,
+        describedBy: DATE_ID_PREFIX + index,
+        describesOwnDate: true,
+        dateLine: `${T.lastWateredPrefix}Mar 6, 2025`,
+      },
+      `${label}: described by its date line`);
 }
 
 /**
@@ -1076,15 +1163,15 @@ async function checkKeyboard(ctx) {
   // (a) Tab from the top of the document to A's button, (b) Enter.
   await pressUntil(page, 'Tab', 'water:p-a', forward);
   activations.push(await activateByKey(page, 'A', 'Enter'));
-  assertActivation(activations[0], 'p-a');
+  assertActivation(activations[0], 'p-a', 0);
   // (c) One Tab to B's button, Space.
   assert.equal(await h.pressAndRecord(page, 'Tab', forward), 'water:p-b');
   activations.push(await activateByKey(page, 'B', 'Space'));
-  assertActivation(activations[1], 'p-b');
+  assertActivation(activations[1], 'p-b', 1);
   // (d) One Tab to C's button, Enter.
   assert.equal(await h.pressAndRecord(page, 'Tab', forward), 'water:p-c');
   activations.push(await activateByKey(page, 'C', 'Enter'));
-  assertActivation(activations[2], 'p-c');
+  assertActivation(activations[2], 'p-c', 2);
   assert.deepEqual(h.distinct(forward), [
     '#plant-name',
     '#last-watered',
@@ -1264,7 +1351,8 @@ async function checkPastMidnight(ctx) {
 
 /**
  * S3: two plants with the same name stay separate rows with their own ids,
- * and Water now changes only the one pressed.
+ * each button is described by its own row's date line, and Water now
+ * changes only the one pressed.
  * @param {!Object} ctx The check context from runCheck.
  * @returns {!Promise<void>} Resolves when every assertion holds.
  */
@@ -1291,6 +1379,13 @@ async function checkDuplicateNames(ctx) {
   assert.equal(new Set(ids).size, 2, 'each Fern has its own id');
   assert.deepEqual(rows.map((row) => row.id), ids, 'rows match storage');
   assert.deepEqual(rowDates(rows), ['Mar 5, 2025', 'Mar 6, 2025']);
+  assert.deepEqual(
+      rows.map((row) => row.describedBy),
+      [`${DATE_ID_PREFIX}0`, `${DATE_ID_PREFIX}1`],
+      'each Fern has its own description id');
+  assert.deepEqual(
+      rows.map((row) => row.describesOwnDate), [true, true],
+      'each Fern is described by its own date line');
   assert.deepEqual(
       stored.map((entry) => entry.lastWatered), ['2025-03-05', TODAY]);
 }
