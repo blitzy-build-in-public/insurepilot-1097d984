@@ -789,58 +789,79 @@ async function settleServerLog(requests) {
 
 /**
  * C12: from navigation through an add, a Water now and a reload, the page
- * requests only its own three files. network.json is written before the
- * outcome is raised, so the log exists even when the check fails.
+ * requests only its own three files. Once the session has opened, the
+ * request logs are recorded in `observed` and network.json is written
+ * whether the check passes or fails, with `pass` true only when every
+ * assertion held. A failure before the server log has settled leaves
+ * `serverSettle` null and logs the server's requests up to that failure.
  * @param {!Object} ctx The check context from runCheck.
- * @returns {!Promise<void>} Resolves when every assertion holds.
+ * @returns {!Promise<void>} Resolves when every assertion holds and
+ *     network.json is written. Rejects with the value the failing action or
+ *     assertion threw, unchanged; when only the write failed, with its
+ *     error.
  */
 async function checkNetwork(ctx) {
   const served = ctx.run.mode === 'served';
   const session = await ctx.newSession();
   const serverStart = served ? ctx.server.requests.length : 0;
-  session.phase = 'load';
-  const page = await session.openPage();
-  await page.waitForLoadState('networkidle');
-  session.phase = 'interactions';
-  await h.addPlants(page, [{ name: 'Monstera' }]);
-  await h.waterButton(page, 'Monstera').click();
-  session.phase = 'reload';
-  await page.reload();
-  await page.waitForLoadState('networkidle');
-  await ctx.screenshot(page);
-
-  // Chromium fetches /favicon.ico asynchronously, only after consulting its
-  // favicon database, so on a busy host the request can reach the server
-  // after networkidle, and Playwright never reports it. The server log is
-  // therefore judged only once it has gone quiet; a page whose requests
-  // never stop fails.
-  const settle = served ? await settleServerLog(ctx.server.requests) : null;
   const allowed = h.expectedFiles(ctx.run, ctx.server);
-  const servedPaths = served ? ctx.server.requests.slice(serverStart) : null;
-  Object.assign(ctx.observed, {
-    allowed,
-    playwright: session.network,
-    server: servedPaths,
-    serverSettle: settle,
-  });
-  let failure = null;
+  Object.assign(ctx.observed, { allowed, playwright: session.network });
+  let settle = null;
+  // Undefined until the server log is sliced, then an array or, in file
+  // mode, null.
+  let servedPaths;
+  // Whether every assertion held is tracked apart from why the check failed,
+  // because an action can throw any value, null and undefined included.
+  let completed = false;
+  let failure;
   try {
+    session.phase = 'load';
+    const page = await session.openPage();
+    await page.waitForLoadState('networkidle');
+    session.phase = 'interactions';
+    await h.addPlants(page, [{ name: 'Monstera' }]);
+    await h.waterButton(page, 'Monstera').click();
+    session.phase = 'reload';
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+    await ctx.screenshot(page);
+
+    // Chromium fetches /favicon.ico asynchronously, only after consulting its
+    // favicon database, so on a busy host the request can reach the server
+    // after networkidle, and Playwright never reports it. The server log is
+    // therefore judged only once it has gone quiet; a page whose requests
+    // never stop fails.
+    settle = served ? await settleServerLog(ctx.server.requests) : null;
+    servedPaths = served ? ctx.server.requests.slice(serverStart) : null;
     assert.ok(
         settle === null || settle.settled,
         `the server log was still growing after ${settle?.waitedMs} ms`);
     assertNetworkContract(session.network, allowed, servedPaths);
+    completed = true;
   } catch (err) {
     failure = err;
   }
-  h.writeNetworkLog(ctx.run, {
-    mode: ctx.run.mode,
-    pageUrl: ctx.url,
-    playwright: session.network,
-    server: servedPaths,
-    serverSettle: settle,
-    pass: failure === null,
-  });
-  if (failure !== null) {
+  if (servedPaths === undefined) {
+    servedPaths = served ? ctx.server.requests.slice(serverStart) : null;
+  }
+  Object.assign(ctx.observed, { server: servedPaths, serverSettle: settle });
+  try {
+    h.writeNetworkLog(ctx.run, {
+      mode: ctx.run.mode,
+      pageUrl: ctx.url,
+      playwright: session.network,
+      server: servedPaths,
+      serverSettle: settle,
+      pass: completed,
+    });
+  } catch (err) {
+    // After a failure network.json is best effort, and the check's own error
+    // stays the one reported.
+    if (completed) {
+      throw err;
+    }
+  }
+  if (!completed) {
     throw failure;
   }
 }
@@ -1467,4 +1488,3 @@ for (const run of h.RUNS) {
     }
   });
 }
-
