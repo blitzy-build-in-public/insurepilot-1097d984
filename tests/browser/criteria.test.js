@@ -26,6 +26,7 @@
 
 const assert = require('node:assert/strict');
 const { after, before, describe, test } = require('node:test');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const h = require('./harness.js');
 
@@ -55,6 +56,15 @@ const RECORD_KEYS = Object.freeze(['id', 'lastWatered', 'name']);
 
 /** The three request paths the static server may see from one check. */
 const SERVED_PATHS = Object.freeze(['/app.js', '/index.html', '/styles.css']);
+
+/** How long the server log must gain no entry before C12 judges it. */
+const SERVER_LOG_QUIET_MS = 5000;
+
+/** Longest C12 waits for the server log to go quiet. */
+const SERVER_LOG_SETTLE_CAP_MS = 15000;
+
+/** How often C12 re-reads the server log while it waits. */
+const SERVER_LOG_POLL_MS = 100;
 
 // ===== Local helpers =====
 
@@ -100,6 +110,31 @@ function listView(rows) {
     datetime,
     dateText,
   }));
+}
+
+/**
+ * Reads what the user can see, as Playwright's isVisible judges it: the
+ * harness readers return DOM content and the hidden property, which a
+ * stylesheet can contradict. `nameError` and `dateError` share their keys
+ * with the readFields entries.
+ * @param {!Object} page A loaded Playwright Page.
+ * @returns {!Promise<{notices: !Array<boolean>, rows: !Array<boolean>,
+ *     list: boolean, emptyState: boolean, nameError: boolean,
+ *     dateError: boolean}>} One flag per notice and per row, in display
+ *     order, and one each for the list, the empty state and the two field
+ *     messages.
+ */
+async function readVisibility(page) {
+  const notices = await page.locator('#notices > p.notice').all();
+  const rows = await page.locator('#plant-list > li.plant').all();
+  return {
+    notices: await Promise.all(notices.map((notice) => notice.isVisible())),
+    rows: await Promise.all(rows.map((row) => row.isVisible())),
+    list: await page.locator('#plant-list').isVisible(),
+    emptyState: await page.locator('#empty-state').isVisible(),
+    nameError: await page.locator('#plant-name-error').isVisible(),
+    dateError: await page.locator('#last-watered-error').isVisible(),
+  };
 }
 
 /**
@@ -496,6 +531,7 @@ async function checkRefusedSubmits(ctx) {
       rowCount: (await h.readRows(page)).length,
       raw: await h.readStored(page),
       active: await h.activeElement(page),
+      visible: await readVisibility(page),
     };
     ctx.observed.subCases[subCase.suffix] = outcome;
     await ctx.screenshot(page, { suffix: subCase.suffix });
@@ -505,11 +541,17 @@ async function checkRefusedSubmits(ctx) {
     const other = fields[subCase.other.error];
     assert.equal(shown.text, subCase.message, label);
     assert.equal(shown.hidden, false, `${label}: the message is shown`);
+    assert.equal(
+        outcome.visible[subCase.field.error], true,
+        `${label}: #${subCase.field.errorId} is visible`);
     assert.equal(shown.inputInvalid, 'true', label);
     assert.equal(shown.describedBy, subCase.field.errorId, label);
     assert.equal(other.inputInvalid, null, `${label}: other field valid`);
     assert.equal(other.describedBy, null, `${label}: other field valid`);
     assert.equal(other.hidden, true, `${label}: no other message`);
+    assert.equal(
+        outcome.visible[subCase.other.error], false,
+        `${label}: #${subCase.other.errorId} is not visible`);
     assert.equal(outcome.rowCount, 0, `${label}: no row added`);
     assert.equal(outcome.raw, null, `${label}: nothing stored`);
     assert.equal(fields.nameValue, subCase.name, `${label}: Name kept`);
@@ -560,18 +602,35 @@ async function checkUnreadableStorage(ctx) {
       rows: await h.readRows(page),
       fields: await h.readFields(page),
       raw: await h.readStored(page),
+      visible: await readVisibility(page),
     };
     ctx.observed.seeds[seed.suffix] = outcome;
     await ctx.screenshot(page, { suffix: seed.suffix });
 
     const label = `seed ${seed.suffix}`;
+    const { visible } = outcome;
     assert.deepEqual(
         noticeView(outcome.notices),
         [{ text: T.storageUnreadable, error: false }], label);
+    assert.deepEqual(
+        visible.notices, [true], `${label}: the notice is visible`);
     assert.deepEqual(rowNames(outcome.rows), seed.rows, label);
+    assert.deepEqual(
+        visible.rows, seed.rows.map(() => true),
+        `${label}: every row is visible`);
+    assert.deepEqual(
+        rowNames(outcome.rows).filter((name, index) => visible.rows[index]),
+        seed.rows, `${label}: the visible rows, in order`);
     if (seed.rows.length === 0) {
       assert.equal(outcome.fields.emptyHidden, false, `${label}: empty`);
       assert.equal(outcome.fields.listHidden, true, `${label}: no list`);
+      assert.equal(
+          visible.emptyState, true, `${label}: #empty-state is visible`);
+      assert.equal(visible.list, false, `${label}: #plant-list is not visible`);
+    } else {
+      assert.equal(visible.list, true, `${label}: #plant-list is visible`);
+      assert.equal(
+          visible.emptyState, false, `${label}: #empty-state is not visible`);
     }
     assert.equal(outcome.raw, seed.raw, `${label}: storage untouched`);
   }
@@ -587,14 +646,19 @@ async function checkUnreadableStorage(ctx) {
 async function checkBlockedStorage(ctx) {
   const { page } = await openFresh(ctx, { block: true });
   const unavailable = [{ text: T.storageUnavailable, error: false }];
+  const visible = {};
+  ctx.observed.visible = visible;
   ctx.observed.onOpen = await h.readNotices(page);
+  visible.onOpen = await readVisibility(page);
   await h.addPlants(page, [
     { name: 'Monstera' },
     { name: 'Fern', date: '2025-03-05' },
   ]);
   ctx.observed.afterAdds = await h.readRows(page);
+  visible.afterAdds = await readVisibility(page);
   await h.waterButton(page, 'Fern').click();
   ctx.observed.afterPress = await h.readRows(page);
+  visible.afterPress = await readVisibility(page);
   await ctx.screenshot(page);
   await page.reload();
   ctx.observed.afterReload = {
@@ -602,19 +666,35 @@ async function checkBlockedStorage(ctx) {
     rows: await h.readRows(page),
     fields: await h.readFields(page),
   };
+  visible.afterReload = await readVisibility(page);
   await ctx.screenshot(page, { suffix: 'reload' });
 
   assert.deepEqual(noticeView(ctx.observed.onOpen), unavailable, 'on open');
+  assert.deepEqual(
+      visible.onOpen.notices, [true], 'the notice is visible on open');
   assert.deepEqual(rowNames(ctx.observed.afterAdds), ['Monstera', 'Fern']);
   assert.deepEqual(
       rowDates(ctx.observed.afterAdds), ['Mar 6, 2025', 'Mar 5, 2025']);
+  assert.deepEqual(
+      visible.afterAdds.rows, [true, true],
+      'both rows are visible after the adds');
   assert.deepEqual(rowNames(ctx.observed.afterPress), ['Monstera', 'Fern']);
   assert.equal(ctx.observed.afterPress[1].dateText, 'Mar 6, 2025');
+  assert.deepEqual(
+      visible.afterPress.rows, [true, true],
+      'both rows are visible after Water now');
   const reloaded = ctx.observed.afterReload;
   assert.deepEqual(noticeView(reloaded.notices), unavailable, 'on reload');
+  assert.deepEqual(
+      visible.afterReload.notices, [true], 'the notice is visible on reload');
   assert.deepEqual(reloaded.rows, [], 'nothing was kept');
   assert.equal(reloaded.fields.emptyHidden, false, 'the empty state shows');
   assert.equal(reloaded.fields.listHidden, true, 'the list is hidden');
+  assert.equal(
+      visible.afterReload.emptyState, true,
+      '#empty-state is visible on reload');
+  assert.equal(
+      visible.afterReload.list, false, '#plant-list is not visible on reload');
 }
 
 
@@ -669,6 +749,45 @@ function assertNetworkContract(network, allowed, servedPaths) {
 }
 
 /**
+ * Waits until the static server's request log has gained no entry for
+ * SERVER_LOG_QUIET_MS, re-reading it every SERVER_LOG_POLL_MS, and stops
+ * after SERVER_LOG_SETTLE_CAP_MS so a page that keeps requesting cannot hang
+ * the check.
+ * @param {!Array<string>} requests The server's live request log.
+ * @returns {!Promise<{settled: boolean, waitedMs: number,
+ *     lateEntries: number, lastArrivalMs: ?number}>} Whether the log went
+ *     quiet within the cap, how long the wait took, how many entries
+ *     arrived during it, and when the last of them arrived after the wait
+ *     began (null when none did).
+ */
+async function settleServerLog(requests) {
+  const start = performance.now();
+  const initial = requests.length;
+  let seen = initial;
+  let quietSince = start;
+  let lastArrivalMs = null;
+  let now = start;
+  while (now - quietSince < SERVER_LOG_QUIET_MS) {
+    if (now - start >= SERVER_LOG_SETTLE_CAP_MS) {
+      break;
+    }
+    await delay(SERVER_LOG_POLL_MS);
+    now = performance.now();
+    if (requests.length !== seen) {
+      seen = requests.length;
+      quietSince = now;
+      lastArrivalMs = Math.round(now - start);
+    }
+  }
+  return {
+    settled: now - quietSince >= SERVER_LOG_QUIET_MS,
+    waitedMs: Math.round(now - start),
+    lateEntries: seen - initial,
+    lastArrivalMs,
+  };
+}
+
+/**
  * C12: from navigation through an add, a Water now and a reload, the page
  * requests only its own three files. network.json is written before the
  * outcome is raised, so the log exists even when the check fails.
@@ -690,15 +809,25 @@ async function checkNetwork(ctx) {
   await page.waitForLoadState('networkidle');
   await ctx.screenshot(page);
 
+  // Chromium fetches /favicon.ico asynchronously, only after consulting its
+  // favicon database, so on a busy host the request can reach the server
+  // after networkidle, and Playwright never reports it. The server log is
+  // therefore judged only once it has gone quiet; a page whose requests
+  // never stop fails.
+  const settle = served ? await settleServerLog(ctx.server.requests) : null;
   const allowed = h.expectedFiles(ctx.run, ctx.server);
   const servedPaths = served ? ctx.server.requests.slice(serverStart) : null;
   Object.assign(ctx.observed, {
     allowed,
     playwright: session.network,
     server: servedPaths,
+    serverSettle: settle,
   });
   let failure = null;
   try {
+    assert.ok(
+        settle === null || settle.settled,
+        `the server log was still growing after ${settle?.waitedMs} ms`);
     assertNetworkContract(session.network, allowed, servedPaths);
   } catch (err) {
     failure = err;
@@ -708,6 +837,7 @@ async function checkNetwork(ctx) {
     pageUrl: ctx.url,
     playwright: session.network,
     server: servedPaths,
+    serverSettle: settle,
     pass: failure === null,
   });
   if (failure !== null) {
@@ -717,21 +847,76 @@ async function checkNetwork(ctx) {
 
 /**
  * Builds C13's layout in one new session: an 80-character name with no
- * spaces, a second plant and the Name message, then measures it and takes
- * a full-page screenshot.
+ * spaces, a second plant and the Name message, then reads the rows and the
+ * long name's rendered state, measures the layout and takes a full-page
+ * screenshot.
  * @param {!Object} ctx The check context from runCheck.
  * @param {{block: (boolean|undefined)}} options Session options.
  * @param {string|undefined} suffix The screenshot suffix; none for
  *     <check>.png.
- * @returns {!Promise<!Object>} The overflow measurement, the Name message
- *     and the notices, with the rendered visibility of each.
+ * @returns {!Promise<!Object>} `rows`, every row from readRows;
+ *     `longNameVisible`, the rendered visibility of the first row's
+ *     .plant__name; `longNameLayout`, one entry per element matched, so
+ *     none when it is absent, holding that element's scrollWidth,
+ *     clientWidth, scrollHeight and clientHeight, its `rect` (left, right,
+ *     top and bottom from getBoundingClientRect), the page's `innerWidth`
+ *     and `clippedBy`, a 'tag#id.class' descriptor for each ancestor up to
+ *     and including body whose overflow on an axis is not visible and whose
+ *     box does not contain the name's rect on that axis; then the overflow
+ *     measurement, the Name message and the notices, with the rendered
+ *     visibility of each.
  */
 async function measureLayout(ctx, options, suffix) {
   const { page } = await openFresh(ctx, options);
   await h.addPlants(page, [{ name: 'W'.repeat(80) }, { name: 'Fern' }]);
   // Name is empty after the adds, so this submit shows the Name message.
   await h.submitForm(page);
+  const longName =
+      page.locator('#plant-list > li.plant').first().locator('.plant__name');
   const outcome = {
+    rows: await h.readRows(page),
+    longNameVisible: await longName.isVisible(),
+    // evaluateAll does not wait for a match, so an absent name reads as [].
+    longNameLayout: await longName.evaluateAll(
+        (names) => names.map((name) => {
+          const rect = name.getBoundingClientRect();
+          // Any overflow but visible (hidden, clip, auto, scroll) hides what
+          // lies outside the box on that axis. 0.5 px absorbs sub-pixel
+          // rounding of the two rects.
+          const slack = 0.5;
+          const clippedBy = [];
+          let node = name.parentElement;
+          while (node !== null) {
+            const style = getComputedStyle(node);
+            const box = node.getBoundingClientRect();
+            const outsideX = rect.left < box.left - slack ||
+                rect.right > box.right + slack;
+            const outsideY = rect.top < box.top - slack ||
+                rect.bottom > box.bottom + slack;
+            if ((style.overflowX !== 'visible' && outsideX) ||
+                (style.overflowY !== 'visible' && outsideY)) {
+              const id = node.id ? `#${node.id}` : '';
+              const classes = Array.from(node.classList, (c) => `.${c}`);
+              clippedBy.push(
+                  `${node.tagName.toLowerCase()}${id}${classes.join('')}`);
+            }
+            node = node === document.body ? null : node.parentElement;
+          }
+          return {
+            scrollWidth: name.scrollWidth,
+            clientWidth: name.clientWidth,
+            scrollHeight: name.scrollHeight,
+            clientHeight: name.clientHeight,
+            rect: {
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+            },
+            innerWidth: window.innerWidth,
+            clippedBy,
+          };
+        })),
     overflow: await h.measureOverflow(page),
     nameError: (await h.readFields(page)).nameError,
     nameErrorVisible: await page.locator('#plant-name-error').isVisible(),
@@ -754,6 +939,29 @@ async function checkNoOverflow(ctx) {
   ctx.observed.blocked = await measureLayout(ctx, { block: true }, 'blocked');
 
   for (const variant of ['plain', 'blocked']) {
+    const { rows, longNameVisible, longNameLayout } = ctx.observed[variant];
+    // The stress condition holds only with the whole long name on screen.
+    assert.deepEqual(
+        rowNames(rows), ['W'.repeat(80), 'Fern'], `${variant}: row names`);
+    assert.equal(longNameVisible, true, `${variant}: long name shown`);
+    assert.equal(
+        longNameLayout.length, 1, `${variant}: one long-name element`);
+    const [layout] = longNameLayout;
+    assert.ok(
+        layout.scrollWidth <= layout.clientWidth &&
+        layout.scrollHeight <= layout.clientHeight,
+        `${variant}: long name clipped, content ${layout.scrollWidth}x` +
+        `${layout.scrollHeight} exceeds box ${layout.clientWidth}x` +
+        `${layout.clientHeight}`);
+    const { rect, innerWidth, clippedBy } = layout;
+    assert.ok(
+        rect.left >= 0 && rect.right <= innerWidth,
+        `${variant}: long name spans ${rect.left} to ${rect.right}, ` +
+        `outside 0 to ${innerWidth}`);
+    assert.deepEqual(
+        clippedBy, [],
+        `${variant}: long name at ${JSON.stringify(rect)} clipped by ` +
+        `${clippedBy.join(', ')}`);
     const { overflow, nameError, nameErrorVisible } = ctx.observed[variant];
     assert.ok(
         overflow.scrollWidth <= overflow.clientWidth,
@@ -913,6 +1121,7 @@ async function checkWriteFailure(ctx) {
     rows: await h.readRows(page),
     notices: await h.readNotices(page),
     raw: await h.readStored(page),
+    visible: await readVisibility(page),
   };
   Object.assign(ctx.observed, { seed, failed });
   await ctx.screenshot(page);
@@ -920,14 +1129,21 @@ async function checkWriteFailure(ctx) {
   ctx.observed.reloaded = {
     rows: await h.readRows(page),
     notices: await h.readNotices(page),
+    visible: await readVisibility(page),
   };
   await ctx.screenshot(page, { suffix: 'reload' });
 
   assert.deepEqual(rowNames(failed.rows), ['Monstera', 'Fern']);
+  assert.deepEqual(failed.visible.rows, [true, true], 'both rows are visible');
   assert.deepEqual(
       noticeView(failed.notices), [{ text: T.saveFailed, error: true }]);
+  assert.deepEqual(
+      failed.visible.notices, [true], 'the save-failed notice is visible');
   assert.equal(failed.raw, seed, 'storage keeps the seeded value');
   assert.deepEqual(rowNames(ctx.observed.reloaded.rows), ['Monstera']);
+  assert.deepEqual(
+      ctx.observed.reloaded.visible.rows, [true],
+      'the Monstera row is visible on reload');
   assert.deepEqual(ctx.observed.reloaded.notices, [], 'no notice on reload');
 }
 
