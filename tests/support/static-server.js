@@ -34,10 +34,16 @@ const CONTENT_TYPES = Object.freeze({
   '.js': 'text/javascript; charset=utf-8',
 });
 
+/** The methods served, sent as Allow on every 405. */
+const ALLOW = 'GET, HEAD';
+
 /** Loopback only, unless the caller or HOST names another address. */
 const DEFAULT_HOST = '127.0.0.1';
 
-/** Printed to stderr when the direct run gets an invalid port argument. */
+/**
+ * Printed to stderr when the direct run gets an invalid port argument or
+ * more than one argument.
+ */
 const USAGE =
     'Usage: [HOST=<address>] node tests/support/static-server.js [port]';
 
@@ -61,6 +67,49 @@ function sendText(res, status, text, extraHeaders = {}) {
   } else {
     res.end(text);
   }
+}
+
+/**
+ * Tells whether the server answers a method rather than refusing it.
+ * @param {string} method The request method.
+ * @returns {boolean} True for GET and HEAD, the methods in ALLOW.
+ */
+function isServedMethod(method) {
+  return method === 'GET' || method === 'HEAD';
+}
+
+/**
+ * Reads the request target that is logged and routed.
+ * @param {!http.IncomingMessage} req The request.
+ * @returns {string} The target as sent, without its query or fragment and
+ *     still percent-encoded, or `/` when that leaves nothing. A CONNECT
+ *     target is an authority, such as example.com:443.
+ */
+function requestPath(req) {
+  // The raw req.url, not new URL(req.url, base).pathname: WHATWG URL
+  // parsing removes dot segments, so /../app.js would become /app.js and
+  // be served instead of refused.
+  return String(req.url || '/').split(/[?#]/)[0] || '/';
+}
+
+/**
+ * Checks a request target's syntax with the WHATWG URL parser.
+ * @param {string} target The request target as sent, query included.
+ * @returns {boolean} False when the parser rejects the target, such as
+ *     `//[` or `http://[`; true otherwise.
+ */
+function hasValidUrlSyntax(target) {
+  try {
+    // Parsed for its syntax only: routing keeps the raw path, because the
+    // parsed pathname has its dot segments removed.
+    new URL(target, 'http://localhost');
+  } catch (err) {
+    if (err instanceof TypeError && err.code === 'ERR_INVALID_URL') {
+      return false;
+    }
+    throw err;
+  }
+  return true;
 }
 
 /**
@@ -98,7 +147,9 @@ function resolveFileName(rawPath) {
 }
 
 /**
- * Answers one request from the root's own files.
+ * Answers one request from the root's own files. Before any file lookup, a
+ * method other than GET or HEAD gets a 405 and a target the URL parser
+ * rejects gets a 404.
  * @param {!http.IncomingMessage} req The request.
  * @param {!http.ServerResponse} res The response.
  * @param {string} rootDir Absolute root directory.
@@ -108,8 +159,12 @@ function resolveFileName(rawPath) {
  *     only on an unexpected error, which the caller turns into a 500.
  */
 async function handleRequest(req, res, rootDir, rawPath) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    sendText(res, 405, 'Method Not Allowed', { 'Allow': 'GET, HEAD' });
+  if (!isServedMethod(req.method)) {
+    sendText(res, 405, 'Method Not Allowed', { 'Allow': ALLOW });
+    return;
+  }
+  if (!hasValidUrlSyntax(req.url || '/')) {
+    sendText(res, 404, 'Not Found');
     return;
   }
   const name = resolveFileName(rawPath);
@@ -163,10 +218,7 @@ async function handleRequest(req, res, rootDir, rawPath) {
  */
 function createRequestListener(rootDir, requests) {
   return (req, res) => {
-    // The raw req.url, not new URL(req.url, base).pathname: WHATWG URL
-    // parsing removes dot segments, so /../app.js would become /app.js and
-    // be served instead of refused.
-    const rawPath = String(req.url || '/').split(/[?#]/)[0] || '/';
+    const rawPath = requestPath(req);
     requests.push(rawPath);
     handleRequest(req, res, rootDir, rawPath).catch(() => {
       if (res.headersSent) {
@@ -179,6 +231,68 @@ function createRequestListener(rootDir, requests) {
         res.destroy();
       }
     });
+  };
+}
+
+/**
+ * Creates the server's checkExpectation listener. Node emits that event,
+ * not 'request', for an HTTP/1.1 request whose Expect header is anything
+ * but 100-continue, and without a listener answers it with a bare 417 that
+ * is never logged. This listener logs the request once, gives a method
+ * other than GET or HEAD the usual 405, gives GET and HEAD a 417, and never
+ * lets an error escape. Expect: 100-continue stays with Node, which sends
+ * 100 Continue and then emits 'request'.
+ * @param {!Array<string>} requests Log that receives each request path.
+ * @returns {function(!http.IncomingMessage, !http.ServerResponse): void}
+ *     The listener.
+ */
+function createExpectationListener(requests) {
+  return (req, res) => {
+    requests.push(requestPath(req));
+    try {
+      if (isServedMethod(req.method)) {
+        sendText(res, 417, 'Expectation Failed');
+      } else {
+        sendText(res, 405, 'Method Not Allowed', { 'Allow': ALLOW });
+      }
+    } catch {
+      res.destroy();
+    }
+  };
+}
+
+/**
+ * Creates the server's connect listener. Node emits that event, not
+ * 'request', for CONNECT, and without a listener destroys the socket
+ * unanswered and unlogged. This listener logs the target once and answers
+ * 405 with Allow on the raw socket, then closes it; it never opens a
+ * tunnel.
+ * @param {!Array<string>} requests Log that receives each request path.
+ * @returns {function(!http.IncomingMessage, !net.Socket): void} The
+ *     listener.
+ */
+function createConnectListener(requests) {
+  return (req, socket) => {
+    // Node has already detached its own error handler and dropped the
+    // socket from the server's connection list, so closeAllConnections()
+    // cannot reach it: this listener absorbs its errors and destroys it as
+    // soon as the response is flushed, so close() never waits on it.
+    socket.on('error', () => socket.destroy());
+    requests.push(requestPath(req));
+    const body = 'Method Not Allowed';
+    // Reading and discarding what the client sends keeps unread bytes from
+    // turning the close into a reset that could drop the response.
+    socket.resume();
+    socket.end([
+      'HTTP/1.1 405 Method Not Allowed',
+      `Allow: ${ALLOW}`,
+      'Content-Type: text/plain; charset=utf-8',
+      `Content-Length: ${Buffer.byteLength(body)}`,
+      'Cache-Control: no-store',
+      'Connection: close',
+      '',
+      body,
+    ].join('\r\n'), () => socket.destroy());
   };
 }
 
@@ -199,7 +313,8 @@ function closeServer(server) {
 /**
  * Starts a static server for the regular .html, .css and .js files directly
  * in `root`. `/` serves index.html; every other path gets a 404, and any
- * method other than GET or HEAD gets a 405.
+ * method other than GET or HEAD, CONNECT included, gets a 405 with Allow.
+ * A GET or HEAD whose Expect header is not 100-continue gets a 417.
  * @param {{root: string, host: (string|undefined),
  *     port: (number|undefined)}=} options `root` is the directory to serve,
  *     resolved against the working directory. `host` is the address to bind,
@@ -209,10 +324,14 @@ function closeServer(server) {
  *     close: function(): Promise<void>}>} Resolves once the server listens.
  *     `url` is `http://<host>:<port>` with no trailing slash, the host
  *     bracketed when it is an IPv6 literal. `requests` is a live log of
- *     every request path in arrival order, as sent, without its query.
- *     `close` destroys open connections and stops the server. Rejects with
- *     a TypeError for a missing or empty root or host, and with the listen
- *     error, such as EADDRINUSE or a port out of range, when binding fails.
+ *     every request path in arrival order, as sent, without its query or
+ *     fragment; a CONNECT is logged by its target authority, and a request
+ *     with an unsupported Expect header is logged too. `close` destroys
+ *     open connections and stops the server. Rejects, without creating a
+ *     server, with a TypeError for a missing or empty root or host or a
+ *     port that is not a number, and with a RangeError for a port that is
+ *     not an integer from 0 to 65535. Rejects with the listen error, such
+ *     as EADDRINUSE, when binding fails.
  */
 function startStaticServer({ root, host = DEFAULT_HOST, port = 0 } = {}) {
   if (typeof root !== 'string' || root === '') {
@@ -223,9 +342,23 @@ function startStaticServer({ root, host = DEFAULT_HOST, port = 0 } = {}) {
     return Promise.reject(
         new TypeError('startStaticServer: host must be a non-empty string'));
   }
+  // Checked here because listen() is overloaded: a string port would name
+  // an IPC pipe and an object would replace the host with listen options.
+  if (typeof port !== 'number') {
+    return Promise.reject(
+        new TypeError('startStaticServer: port must be a number'));
+  }
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    return Promise.reject(new RangeError(
+        'startStaticServer: port must be an integer from 0 to 65535'));
+  }
   const rootDir = path.resolve(root);
   const requests = [];
   const server = http.createServer(createRequestListener(rootDir, requests));
+  // Node routes each request to exactly one of these three listeners, so
+  // each is logged once.
+  server.on('checkExpectation', createExpectationListener(requests));
+  server.on('connect', createConnectListener(requests));
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
@@ -297,16 +430,19 @@ function printLanUrls(port) {
 
 /**
  * Runs the server from the command line, serving the repository root.
- * An invalid port argument or a listen failure, such as EADDRINUSE, prints
- * to stderr and exits with code 1. The server then runs until the process
- * is stopped, for example with Ctrl+C.
+ * An invalid port argument, more than one argument or a listen failure,
+ * such as EADDRINUSE, prints to stderr and exits with code 1. The server
+ * then runs until the process is stopped, for example with Ctrl+C.
  */
 function main() {
   // From __dirname, not the working directory, so the run serves the
   // repository root wherever it is started.
   const root = path.resolve(__dirname, '..', '..');
   const host = process.env.HOST || DEFAULT_HOST;
-  const port = parsePort(process.argv[2]);
+  // The port is the only argument, so a second one, such as the host in
+  // `8080 0.0.0.0` that belongs in HOST, is a misuse and gets the usage.
+  const args = process.argv.slice(2);
+  const port = args.length <= 1 ? parsePort(args[0]) : null;
   if (port === null) {
     console.error(USAGE);
     process.exitCode = 1;
