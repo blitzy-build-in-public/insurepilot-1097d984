@@ -195,11 +195,13 @@ button[type="submit"] {
   border-block-start: 1px solid var(--divider);
 }
 
-/* The 12rem basis lets the button wrap below the text on narrow screens.
-   The clip keeps every glyph's ink inside its own row, however tall a
-   stack of combining marks grows. Its 1rem margin equals the row padding
-   and the gap to the button, so ordinary ascenders, descenders and side
-   bearings are never cut and the clip edge never reaches a neighbour. */
+/* The clip keeps every glyph's ink inside its own row, however tall a
+   stack of combining marks grows. Where overflow-clip-margin is supported,
+   its 1rem margin equals the row padding and the gap to the button, so
+   ordinary ascenders, descenders and side bearings are not cut. Where it
+   is not, the clip falls at the text box itself and can trim about 1px of
+   a glyph's antialiased edge. Either way the clip edge never reaches a
+   neighbour. */
 .plant__text {
   flex: 1 1 12rem;
   min-width: 0;

@@ -40,7 +40,6 @@
   /** Longest allowed plant name, in Unicode code points. */
   const NAME_MAX_LENGTH = 80;
 
-  /** Validation and storage message texts shown to the user. */
   const MESSAGES = Object.freeze({
     nameRequired: 'Enter a plant name',
     nameTooLong: 'Name must be 80 characters or fewer',
@@ -90,7 +89,8 @@
     if (value === '') {
       return { ok: false, message: MESSAGES.nameRequired };
     }
-    // Array.from splits by code point, so an emoji counts as one character.
+    // Array.from splits by code point, so a supplementary-plane code point
+    // (beyond U+FFFF) counts once rather than as its two UTF-16 code units.
     if (Array.from(value).length > NAME_MAX_LENGTH) {
       return { ok: false, message: MESSAGES.nameTooLong };
     }
@@ -450,13 +450,8 @@
 
   // ===== 3. Rendering =====
 
-  /** Visible text of every Water now button. */
   const WATER_LABEL = 'Water now';
-
-  /** Start of a Water now button's accessible name; the plant name follows. */
   const WATER_NAME_PREFIX = 'Water now: ';
-
-  /** Text before a row's date. */
   const DATE_PREFIX = 'Last watered ';
 
   /**
