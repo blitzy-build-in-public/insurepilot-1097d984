@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Plant Parent</title>
+    <!-- An empty inline icon: without one, a served page makes the browser
+         request /favicon.ico. A data: URL is not a network request. -->
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="styles.css">
+    <!-- A classic deferred script, not a module: module scripts are blocked
+         from file://, and defer runs it once the markup below is parsed. -->
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <!-- No skip link: main is the page's first and only content block, so
+         there is nothing to bypass, and the page adds no controls beyond
+         the form and the rows. -->
+    <main class="page">
+      <h1>Plant Parent</h1>
+
+      <!-- Polite live region present from load; app.js changes only its
+           children, so each new set of notices is announced. -->
+      <div id="notices" class="notices" role="status"></div>
+
+      <!-- novalidate: app.js shows inline messages in place of the native
+           validation bubbles. The Name field carries no length limit
+           attribute, which would truncate silently and make the over-80
+           message unreachable; app.js validates the length. -->
+      <form id="add-plant-form" novalidate aria-labelledby="add-plant-heading">
+        <h2 id="add-plant-heading">Add a plant</h2>
+        <div class="field">
+          <label for="plant-name">Name</label>
+          <input id="plant-name" name="name" type="text" required autocomplete="off">
+          <p id="plant-name-error" class="field-error" hidden></p>
+        </div>
+        <div class="field">
+          <label for="last-watered">Last watered</label>
+          <!-- app.js sets value and max to today's local date. -->
+          <input id="last-watered" name="lastWatered" type="date" required>
+          <p id="last-watered-error" class="field-error" hidden></p>
+        </div>
+        <button type="submit">Add plant</button>
+      </form>
+
+      <section aria-labelledby="plants-heading">
+        <h2 id="plants-heading">Your plants</h2>
+        <!-- The empty state and the list both start hidden; app.js's first
+             render reveals one, so a saved list never flashes the empty
+             message. -->
+        <p id="empty-state" class="empty-state" hidden>No plants yet. Add your first plant above.</p>
+        <!-- role="list" is explicit because Safari with VoiceOver drops list
+             semantics from a list styled with list-style: none. -->
+        <ul id="plant-list" class="plant-list" role="list" hidden></ul>
+      </section>
+    </main>
+  </body>
+</html>
