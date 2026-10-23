@@ -78,20 +78,20 @@ h2 {
 form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.5rem;
 }
 
 section {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  margin-block-start: 2rem;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
+  gap: 1rem;
 }
 
 label {
@@ -108,8 +108,10 @@ input {
      horizontal overflow. */
   min-width: 0;
   min-height: 2.75rem;
-  padding-block: 0.5rem;
-  padding-inline: 0.75rem;
+  /* Centres the 1.5rem line box in the 2.75rem target, inside the 1px
+     border. */
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 1px);
+  padding-inline: 1rem;
   border: 1px solid var(--control-border);
   border-radius: var(--radius);
   background: var(--background);
@@ -122,7 +124,7 @@ input {
 button[type="submit"],
 .plant__water {
   min-height: 2.75rem;
-  padding-block: 0.5rem;
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 1px);
   padding-inline: 1rem;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
@@ -132,7 +134,7 @@ button[type="submit"],
 button[type="submit"] {
   align-self: flex-start;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--background);
 }
 
 .plant__water {
@@ -171,8 +173,8 @@ button[type="submit"] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 1rem;
-  padding-block: 0.75rem;
+  gap: 1rem;
+  padding-block: 1rem;
 }
 
 .plant + .plant {
@@ -205,13 +207,12 @@ button[type="submit"] {
 .notices {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
 }
 
 .notice {
   margin: 0;
-  padding-block: 0.75rem;
-  padding-inline: 1rem;
+  padding: 1rem;
   border-inline-start: 4px solid var(--muted);
   border-radius: var(--radius);
   background: var(--surface);
@@ -238,8 +239,8 @@ button[type="submit"] {
 /* The 1px-thicker border is offset by 1px less padding, so the box keeps
    its size. */
 [aria-invalid="true"] {
-  padding-block: calc(0.5rem - 1px);
-  padding-inline: calc(0.75rem - 1px);
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 2px);
+  padding-inline: calc(1rem - 1px);
   border: 2px solid var(--text);
 }
 
