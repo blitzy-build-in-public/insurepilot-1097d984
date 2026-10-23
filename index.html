@@ -9,8 +9,12 @@
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="styles.css">
     <!-- A classic deferred script, not a module: module scripts are blocked
-         from file://, and defer runs it once the markup below is parsed. -->
-    <script src="app.js" defer></script>
+         from file://, and defer runs it once the markup below is parsed.
+         blocking="render" holds the first paint until app.js has rendered
+         the saved rows and today's date, so a reload never shows a blank
+         list. Browsers that do not support the attribute ignore it and run
+         the script as a plain deferred one. -->
+    <script src="app.js" defer blocking="render"></script>
   </head>
   <body>
     <!-- No skip link: main is the page's first and only content block, so
