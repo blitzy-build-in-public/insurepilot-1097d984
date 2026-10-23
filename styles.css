@@ -107,8 +107,12 @@ input {
   /* Stops the intrinsic width of iOS Safari's date input from forcing
      horizontal overflow. */
   min-width: 0;
+  height: 2.75rem;
   min-height: 2.75rem;
-  /* Centres the 1.5rem line box in the 2.75rem target, inside the 1px
+  /* Every input, the date field included, is one 2.75rem control height.
+     The height is set rather than grown from the content because the date
+     field's own edit fields stand taller than the 1.5rem text line. The
+     padding centres that line box in the 2.75rem target, inside the 1px
      border. */
   padding-block: calc((2.75rem - 1.5rem) / 2 - 1px);
   padding-inline: 1rem;
@@ -177,14 +181,30 @@ button[type="submit"] {
   padding-block: 1rem;
 }
 
+/* At 25rem and narrower the column gap is the row's full width, so nothing
+   fits beside the text: Water now always wraps below it and the text keeps
+   the whole row. Wider, the 1rem gap applies and the text column beside the
+   button is wide enough for the whole date line. */
+@media (max-width: 25rem) {
+  .plant {
+    column-gap: 100%;
+  }
+}
+
 .plant + .plant {
   border-block-start: 1px solid var(--divider);
 }
 
-/* The 12rem basis lets the button wrap below the text on narrow screens. */
+/* The 12rem basis lets the button wrap below the text on narrow screens.
+   The clip keeps every glyph's ink inside its own row, however tall a
+   stack of combining marks grows. Its 1rem margin equals the row padding
+   and the gap to the button, so ordinary ascenders, descenders and side
+   bearings are never cut and the clip edge never reaches a neighbour. */
 .plant__text {
   flex: 1 1 12rem;
   min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: 1rem;
 }
 
 /* An 80-character name with no spaces breaks instead of widening the page. */
@@ -197,6 +217,11 @@ button[type="submit"] {
 .plant__date {
   display: block;
   color: var(--muted);
+}
+
+/* The date is never split from its year, even under enlarged text. */
+.plant__date time {
+  white-space: nowrap;
 }
 
 /* ===== Notices and errors ===== */
@@ -254,4 +279,24 @@ input[type="date"]:focus-within,
 button:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* When focus scrolls a control into view, the 0.5rem margin keeps the 3px
+   ring and its 2px offset on screen. Above an input, 3rem also keeps its
+   label in view: the 1.5rem label line, the 1rem gap and that 0.5rem. */
+input,
+button {
+  scroll-margin-block: 0.5rem;
+}
+
+input {
+  scroll-margin-block-start: 3rem;
+}
+
+/* Shift+Tab enters the date field on Chromium's picker button, and focus
+   then scrolls that button rather than the field. The button is 1.25rem
+   tall and centred in the 2.75rem field, so its margins add the 0.75rem
+   that lies between it and the field's edges. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  scroll-margin-block: calc(3rem + 0.75rem) calc(0.5rem + 0.75rem);
 }
