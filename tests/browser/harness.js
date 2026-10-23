@@ -138,6 +138,19 @@ const TEXT = Object.freeze({
 /** The page's own files, the only requests the network contract allows. */
 const APP_FILES = Object.freeze(['index.html', 'styles.css', 'app.js']);
 
+/**
+ * Options for every Chromium launch, regular and persistent. The 'chromium'
+ * channel runs Playwright's full Chromium build in its new headless mode
+ * rather than the default chromium-headless-shell. The shell never fetches
+ * /favicon.ico, so served-mode C12 could not observe the request the inline
+ * data: icon exists to prevent; the full build requests it when that icon
+ * is missing. The full build also creates a singleton socket under TMPDIR,
+ * and a Unix socket path is limited to about 107 bytes, so a TMPDIR longer
+ * than about 60 characters aborts the launch with "Socket path too long".
+ * @const {!Readonly<{channel: string}>}
+ */
+const LAUNCH_OPTIONS = Object.freeze({ channel: 'chromium' });
+
 // ===== Browser, server, URLs =====
 
 /**
@@ -145,7 +158,7 @@ const APP_FILES = Object.freeze(['index.html', 'styles.css', 'app.js']);
  * @returns {!Promise<!Object>} The Playwright Browser.
  */
 function launchBrowser() {
-  return chromium.launch();
+  return chromium.launch(LAUNCH_OPTIONS);
 }
 
 /**
@@ -323,6 +336,7 @@ async function createSession(
  */
 async function launchPersistent(profileDir, run, now, session) {
   const context = await chromium.launchPersistentContext(profileDir, {
+    ...LAUNCH_OPTIONS,
     viewport: run.viewport,
     timezoneId: TIMEZONE,
   });
