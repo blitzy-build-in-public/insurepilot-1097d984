@@ -11,6 +11,12 @@
 const STORAGE_KEY = 'plant-parent.plants.v1';
 
 /**
+ * The option names createFakeStorage accepts. Any other key is rejected, so
+ * a misspelled option fails the test instead of selecting another state.
+ */
+const FAKE_STORAGE_OPTIONS = Object.freeze(['initial', 'failWrites']);
+
+/**
  * Creates a Map-backed stand-in for a Storage area.
  * @param {{initial: (string|undefined), failWrites: (boolean|undefined)}=}
  *     options `initial` seeds the plant key, which stays absent while it is
@@ -22,8 +28,28 @@ const STORAGE_KEY = 'plant-parent.plants.v1';
  *     writes: !Array<{key: string, value: string}>}} The fake. Its methods
  *     are own, writable properties, so a test can replace one; `writes`
  *     logs every setItem attempt, failed ones included.
+ * @throws {TypeError} When `options` is null, an array or not an object,
+ *     has any own key, string or symbol, enumerable or not, other than
+ *     `initial` and `failWrites`, or holds a `failWrites` that is neither a
+ *     boolean nor undefined.
  */
-function createFakeStorage({ initial, failWrites = false } = {}) {
+function createFakeStorage(options = {}) {
+  if (options === null || typeof options !== 'object' ||
+      Array.isArray(options)) {
+    throw new TypeError('createFakeStorage: options must be an object');
+  }
+  // Reflect.ownKeys, unlike Object.keys, also yields non-enumerable and
+  // symbol keys; String() names a symbol, which a template cannot convert.
+  for (const name of Reflect.ownKeys(options)) {
+    if (!FAKE_STORAGE_OPTIONS.includes(name)) {
+      throw new TypeError(
+          `createFakeStorage: unknown option "${String(name)}"`);
+    }
+  }
+  const { initial, failWrites = false } = options;
+  if (typeof failWrites !== 'boolean') {
+    throw new TypeError('createFakeStorage: failWrites must be a boolean');
+  }
   const data = new Map();
   const writes = [];
   if (initial !== undefined) {

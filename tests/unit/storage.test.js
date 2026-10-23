@@ -58,18 +58,24 @@ function seed(entries) {
 }
 
 /**
- * Creates a makeId double returning 'p-test-1', 'p-test-2', and so on.
- * Each call is logged in the double's `calls` array as a snapshot of its
- * argument, because normalizeStoredPlants keeps adding to the Set it
- * passes, together with whether that argument was a Set.
+ * Creates a makeId double returning 'p-test-1', 'p-test-2', and so on,
+ * skipping any candidate already in usedIds, so it honours makeId's
+ * contract to return an id not in the given Set. Each call is logged in the
+ * double's `calls` array as a snapshot of its argument, because
+ * normalizeStoredPlants keeps adding to the Set it passes, together with
+ * whether that argument was a Set.
  * @returns {function(!Set<string>): string} The double, with a
  *     `calls: !Array<{ids: !Set<string>, isSet: boolean}>` property.
  */
 function makeIdCounter() {
   const calls = [];
+  let next = 0;
   const makeId = (usedIds) => {
     calls.push({ ids: new Set(usedIds), isSet: usedIds instanceof Set });
-    return `p-test-${calls.length}`;
+    do {
+      next += 1;
+    } while (usedIds.has(`p-test-${next}`));
+    return `p-test-${next}`;
   };
   makeId.calls = calls;
   return makeId;
@@ -305,6 +311,22 @@ describe('load: repairable entries', () => {
     assert.deepEqual(makeId.calls[0].ids, new Set(['p-a']));
   });
 
+  test('gives a repaired entry an id distinct from a kept p-test-1', () => {
+    const kept = { ...MONSTERA, id: 'p-test-1' };
+    const makeId = makeIdCounter();
+    const { result } = loadSeeded(
+        seed([kept, { name: 'Fern', lastWatered: '2025-03-05' }]), makeId);
+    assert.deepEqual(result, {
+      plants: [kept, { ...FERN, id: 'p-test-2' }],
+      available: true,
+      unreadable: false,
+    });
+    assert.equal(makeId.calls.length, 1);
+    assert.equal(makeId.calls[0].isSet, true);
+    assert.deepEqual(makeId.calls[0].ids, new Set(['p-test-1']));
+    assert.notEqual(result.plants[0].id, result.plants[1].id);
+  });
+
   test('reserves ids only for kept entries', () => {
     const makeId = makeIdCounter();
     const { result } = loadSeeded(seed([
@@ -496,6 +518,46 @@ describe('save: write failure', () => {
       assert.equal(fake.getItem(KEY), raw);
     });
   }
+
+  test('a later successful save on one store writes the failed change', () => {
+    const raw = seed([MONSTERA]);
+    const fake = createFakeStorage({ initial: raw });
+    const getStorage = countingGetStorage(() => fake);
+    const store = storage.createPlantStorage(
+        { getStorage, makeId: makeIdCounter() });
+    assert.deepEqual(store.load(), {
+      plants: [MONSTERA],
+      available: true,
+      unreadable: false,
+    });
+    // Storage fills up for a while. save() looks setItem up on the handle
+    // at each call, so lending this fake the setItem of a quota-failing
+    // fake makes its writes throw the same QuotaExceededError, logged in
+    // that fake's writes, while the store keeps its one handle.
+    const { setItem } = fake;
+    const quotaFull = createFakeStorage({ failWrites: true });
+    fake.setItem = quotaFull.setItem;
+    const failed = [MONSTERA, FERN];
+    assert.deepEqual(store.save(failed), WRITE_FAILED);
+    assert.equal(fake.getItem(KEY), raw);
+    assert.deepEqual(quotaFull.writes, [{ key: KEY, value: seed(failed) }]);
+    // Storage recovers. The next change's save writes the whole list, so
+    // the change that failed above reaches storage with it.
+    fake.setItem = setItem;
+    const cactus = { id: 'p-c', name: 'Cactus', lastWatered: '2025-03-06' };
+    const next = [...failed, cactus];
+    assert.deepEqual(store.save(next), { ok: true });
+    assert.equal(fake.getItem(KEY), seed(next));
+    assert.deepEqual(fake.writes, [{ key: KEY, value: seed(next) }]);
+    assert.equal(getStorage.count, 1);
+    const makeId = makeIdCounter();
+    assert.deepEqual(storeOver(fake, makeId).load(), {
+      plants: next,
+      available: true,
+      unreadable: false,
+    });
+    assert.equal(makeId.calls.length, 0);
+  });
 });
 
 describe('storage unavailable', () => {
@@ -546,4 +608,60 @@ describe('storage unavailable', () => {
     assertUnavailable(store, ['save', 'load', 'save', 'load']);
     assert.equal(getStorage.count, 1);
   });
+});
+
+describe('createFakeStorage: option checks', () => {
+  const NOT_AN_OBJECT = /^createFakeStorage: options must be an object$/;
+  const NOT_A_BOOLEAN = /^createFakeStorage: failWrites must be a boolean$/;
+  const REJECTED_OPTIONS = [
+    { label: 'the misspelled key failWrite', options: { failWrite: true },
+      message: /^createFakeStorage: unknown option "failWrite"$/ },
+    { label: 'the misspelled key inital', options: { inital: '[]' },
+      message: /^createFakeStorage: unknown option "inital"$/ },
+    { label: 'a non-enumerable misspelled key inital',
+      options: Object.defineProperty({}, 'inital', { value: '[]' }),
+      message: /^createFakeStorage: unknown option "inital"$/ },
+    { label: 'a symbol key', options: { [Symbol('failWrites')]: true },
+      message: /^createFakeStorage: unknown option "Symbol\(failWrites\)"$/ },
+    { label: 'failWrites as the string "false"',
+      options: { failWrites: 'false' }, message: NOT_A_BOOLEAN },
+    { label: 'failWrites as the number 1', options: { failWrites: 1 },
+      message: NOT_A_BOOLEAN },
+    { label: 'failWrites as null', options: { failWrites: null },
+      message: NOT_A_BOOLEAN },
+    { label: 'null options', options: null, message: NOT_AN_OBJECT },
+    { label: 'array options', options: [], message: NOT_AN_OBJECT },
+    { label: 'string options', options: 'failWrites',
+      message: NOT_AN_OBJECT },
+  ];
+  for (const { label, options, message } of REJECTED_OPTIONS) {
+    test(`rejects ${label} with a TypeError`, () => {
+      assert.throws(
+          () => createFakeStorage(options), { name: 'TypeError', message });
+    });
+  }
+
+  for (const failWrites of [undefined, false]) {
+    test(`stores writes when failWrites is ${failWrites}`, () => {
+      const fake = createFakeStorage({ failWrites });
+      fake.setItem(KEY, '[]');
+      assert.equal(fake.getItem(KEY), '[]');
+      assert.deepEqual(fake.writes, [{ key: KEY, value: '[]' }]);
+    });
+  }
+
+  const SEEDS = [
+    { label: 'leaves the key absent for an undefined initial',
+      initial: undefined, stored: null },
+    { label: 'seeds an empty string initial', initial: '', stored: '' },
+    { label: 'seeds a non-string initial as a string', initial: 42,
+      stored: '42' },
+  ];
+  for (const { label, initial, stored } of SEEDS) {
+    test(`${label} without logging a write`, () => {
+      const fake = createFakeStorage({ initial });
+      assert.equal(fake.getItem(KEY), stored);
+      assert.deepEqual(fake.writes, []);
+    });
+  }
 });
