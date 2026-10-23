@@ -918,8 +918,10 @@ async function closeSessions(ctx) {
 /**
  * Runs one check for one run. The body gets a context whose sessions are
  * tracked and closed afterwards. The check fails on any thrown error, on any
- * page error or console error or warning in its sessions, or when no
- * <check>.png can be written. Either way one results entry is recorded.
+ * page error or console error or warning in its sessions, when no
+ * <check>.png can be written, or when a session fails to close (which would
+ * leave a browser or profile behind). Either way one results entry is
+ * recorded, after the sessions are closed.
  * @param {{check: string, run: {name: string, mode: string,
  *     viewport: {width: number, height: number}}, browser: !Object,
  *     server: ?Object}} spec The check id, the run, the shared browser and
