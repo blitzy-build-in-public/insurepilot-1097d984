@@ -24,25 +24,19 @@ const {
 /** The storage key, spelled out so that a change to it fails this suite. */
 const KEY = 'plant-parent.plants.v1';
 
-/** A canonical stored date: exactly four year digits. */
 const STORED_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** A valid stored record, reused as an expected value. */
 const MONSTERA = Object.freeze(
     { id: 'p-a', name: 'Monstera', lastWatered: '2025-03-03' });
 
-/** A second valid stored record. */
 const FERN = Object.freeze(
     { id: 'p-b', name: 'Fern', lastWatered: '2025-03-05' });
 
-/** What load() returns when storage cannot be reached. */
 const UNAVAILABLE_LOAD = Object.freeze(
     { plants: [], available: false, unreadable: false });
 
-/** What save() returns when storage cannot be reached. */
 const UNAVAILABLE_SAVE = Object.freeze({ ok: false, reason: 'unavailable' });
 
-/** What save() returns when the write throws. */
 const WRITE_FAILED = Object.freeze({ ok: false, reason: 'write-failed' });
 
 /** Both orders in which a store's first call can resolve its handle. */
@@ -70,6 +64,12 @@ function seed(entries) {
 function makeIdCounter() {
   const calls = [];
   let next = 0;
+  /**
+   * Logs the call in `calls`, with a snapshot of usedIds, then returns the
+   * next unused id.
+   * @param {!Set<string>} usedIds The ids already kept.
+   * @returns {string} The next 'p-test-N' id not in usedIds.
+   */
   const makeId = (usedIds) => {
     calls.push({ ids: new Set(usedIds), isSet: usedIds instanceof Set });
     do {
@@ -88,6 +88,10 @@ function makeIdCounter() {
  * @returns {function(): *} The wrapper, with a numeric `count` property.
  */
 function countingGetStorage(getStorage) {
+  /**
+   * Adds one to `count`, then calls the wrapped getter.
+   * @returns {*} What getStorage returns.
+   */
   const counted = () => {
     counted.count += 1;
     return getStorage();
@@ -104,7 +108,14 @@ function countingGetStorage(getStorage) {
  *     The store.
  */
 function storeOver(fake, makeId) {
-  return storage.createPlantStorage({ getStorage: () => fake, makeId });
+  return storage.createPlantStorage({
+    /**
+     * Resolves the store's storage handle.
+     * @returns {!Object} The storage double.
+     */
+    getStorage: () => fake,
+    makeId,
+  });
 }
 
 /**
@@ -502,14 +513,31 @@ describe('save: write failure', () => {
   });
 
   const THROWN = [
-    { label: 'a SecurityError',
-      error: () => new DOMException('x', 'SecurityError') },
-    { label: 'a plain Error', error: () => new Error('boom') },
+    {
+      label: 'a SecurityError',
+      /**
+       * Creates the error this case's setItem throws.
+       * @returns {!DOMException} A SecurityError.
+       */
+      error: () => new DOMException('x', 'SecurityError'),
+    },
+    {
+      label: 'a plain Error',
+      /**
+       * Creates the error this case's setItem throws.
+       * @returns {!Error} A plain Error.
+       */
+      error: () => new Error('boom'),
+    },
   ];
   for (const { label, error } of THROWN) {
     test(`reports ${label} from setItem as write-failed`, () => {
       const raw = seed([MONSTERA]);
       const fake = createFakeStorage({ initial: raw });
+      /**
+       * Replaces setItem with a write that always fails.
+       * @throws {DOMException|Error} Always, the error this case creates.
+       */
       fake.setItem = () => {
         throw error();
       };
@@ -564,8 +592,22 @@ describe('storage unavailable', () => {
   const FAILING_GETTERS = [
     { label: 'reading storage throws a SecurityError',
       getStorage: blockedGetStorage },
-    { label: 'the storage object is null', getStorage: () => null },
-    { label: 'the storage object is undefined', getStorage: () => undefined },
+    {
+      label: 'the storage object is null',
+      /**
+       * Resolves the storage handle to nothing.
+       * @returns {null} No storage object.
+       */
+      getStorage: () => null,
+    },
+    {
+      label: 'the storage object is undefined',
+      /**
+       * Resolves the storage handle to nothing.
+       * @returns {undefined} No storage object.
+       */
+      getStorage: () => undefined,
+    },
   ];
   for (const { label, getStorage } of FAILING_GETTERS) {
     for (const order of CALL_ORDERS) {
@@ -581,6 +623,11 @@ describe('storage unavailable', () => {
   test('getItem throwing makes storage unavailable for good', () => {
     const fake = createFakeStorage({ initial: seed([MONSTERA]) });
     let reads = 0;
+    /**
+     * Replaces getItem with a read that counts itself in `reads`, then
+     * fails as blocked storage does.
+     * @throws {DOMException} Always, a SecurityError.
+     */
     fake.getItem = () => {
       reads += 1;
       throw new DOMException('Access is denied', 'SecurityError');

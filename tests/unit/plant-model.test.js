@@ -12,10 +12,8 @@ const assert = require('node:assert/strict');
 /** The fixed local "today" every date-dependent call receives. */
 const TODAY = '2025-03-06';
 
-/** The id format: 'p-' followed by 32 lowercase hex digits. */
 const ID_PATTERN = /^p-[0-9a-f]{32}$/;
 
-/** Every function the model exposes. */
 const MODEL_FUNCTIONS = Object.freeze([
   'validateName',
   'validateDate',
@@ -30,7 +28,6 @@ const MODEL_FUNCTIONS = Object.freeze([
   'normalizeStoredPlants',
 ]);
 
-/** The exact validation and storage message texts. */
 const EXPECTED_MESSAGES = Object.freeze({
   nameRequired: 'Enter a plant name',
   nameTooLong: 'Name must be 80 characters or fewer',
@@ -87,6 +84,12 @@ function fixedBytes(n) {
 function createByteSource(makeBytes) {
   const sizes = [];
   return {
+    /**
+     * Logs `n` in `sizes`, then returns `makeBytes(n, index)`, where index
+     * is this call's zero-based position.
+     * @param {number} n The number of bytes.
+     * @returns {!Uint8Array} The bytes `makeBytes` builds for this call.
+     */
     getRandomBytes(n) {
       sizes.push(n);
       return makeBytes(n, sizes.length - 1);
@@ -272,11 +275,21 @@ describe('generateId', () => {
   for (const { label, makeBytes, expected } of [
     {
       label: 'zero-pads each byte to two hex digits',
+      /**
+       * Returns the bytes 0, 1, 2, ... in order.
+       * @param {number} n The number of bytes.
+       * @returns {!Uint8Array} The bytes.
+       */
       makeBytes: (n) => Uint8Array.from({ length: n }, (_, i) => i),
       expected: 'p-000102030405060708090a0b0c0d0e0f',
     },
     {
       label: 'writes lowercase hex',
+      /**
+       * Returns n bytes that all hold 0xff.
+       * @param {number} n The number of bytes.
+       * @returns {!Uint8Array} The bytes.
+       */
       makeBytes: (n) => filledBytes(n, 0xff),
       expected: `p-${'ff'.repeat(16)}`,
     },
