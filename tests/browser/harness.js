@@ -154,7 +154,10 @@ const LAUNCH_OPTIONS = Object.freeze({ channel: 'chromium' });
 // ===== Browser, server, URLs =====
 
 /**
- * Launches headless Chromium. The test file calls it once.
+ * Launches headless Chromium with LAUNCH_OPTIONS. The test file launches one
+ * shared browser in its `before` hook and one dedicated browser per run of a
+ * check flagged `ownBrowser` (C12), so earlier served checks cannot hide
+ * C12's /favicon.ico request.
  * @returns {!Promise<!Object>} The Playwright Browser.
  */
 function launchBrowser() {
@@ -472,7 +475,17 @@ async function createSession(
     pages: [],
     phase: 'load',
     persistent: false,
+    /**
+     * Opens a page in this session's context and loads the session URL.
+     * @returns {!Promise<!Object>} The loaded Playwright Page.
+     */
     openPage: () => openSessionPage(session),
+    /**
+     * Closes the context, sharing one attempt among concurrent calls.
+     * @returns {!Promise<void>} Resolves once the context is confirmed
+     *     closed, and at once on every later call; rejects when the attempt
+     *     fails, keeping the context for the next call to retry.
+     */
     close: () => {
       // Concurrent calls share one attempt. A failed attempt is cleared so
       // the next call retries; a successful one is returned to every later
@@ -580,45 +593,82 @@ async function createPersistentSession(run, url, { now = DEFAULT_NOW } = {}) {
     pages: [],
     phase: 'load',
     persistent: true,
+    /**
+     * Opens a page in this session's current context and loads the session
+     * URL.
+     * @returns {!Promise<!Object>} The loaded Playwright Page.
+     */
     openPage: () => openSessionPage(session),
+    /**
+     * Closes the browser gracefully, flushing storage to the profile, then
+     * launches it again on the same profile with the same viewport and clock.
+     * @returns {!Promise<void>} Resolves once `session.context` holds the new
+     *     context. Rejects when the session is closing, closed or already
+     *     relaunching, or when the close or the launch fails; a context that
+     *     fails to close stays in `session.context` for close() to retry.
+     */
     relaunch: async () => {
       if (closing !== null || relaunching !== null) {
         throw new Error(
             `${run.name}: a persistent session that is closing, closed or ` +
             'already relaunching cannot relaunch');
       }
-      relaunching = (async () => {
-        // The previous context stays in session.context until it has
-        // closed, so a failed close leaves it for close() to retry.
-        if (session.context) {
-          await closeContext(session.context);
-          session.context = null;
-        }
-        session.context = await launchPersistent(profileDir, run, now, session);
-      })();
+      relaunching = (
+          /**
+           * Closes the current context, if any, then launches the next one
+           * on the same profile.
+           * @returns {!Promise<void>} Resolves once `session.context` holds
+           *     the new context; rejects when the close or the launch fails.
+           */
+          async () => {
+            // The previous context stays in session.context until it has
+            // closed, so a failed close leaves it for close() to retry.
+            if (session.context) {
+              await closeContext(session.context);
+              session.context = null;
+            }
+            session.context =
+                await launchPersistent(profileDir, run, now, session);
+          })();
       try {
         await relaunching;
       } finally {
         relaunching = null;
       }
     },
+    /**
+     * Lets a relaunch in flight settle, closes the context, then removes the
+     * profile, sharing one attempt among concurrent calls.
+     * @returns {!Promise<void>} Resolves once the context is confirmed closed
+     *     and the profile removed, and at once on every later call; rejects
+     *     when the attempt fails, keeping what it could not close or remove
+     *     for the next call to retry.
+     */
     close: () => {
       // Concurrent calls share one attempt. A failed attempt is cleared so
       // the next call retries, keeping the context and the profile; a
       // successful one is returned to every later call, which does nothing.
-      closing = closing ?? (async () => {
-        // A relaunch in flight settles first, so the context it leaves in
-        // session.context is the one closed here.
-        await Promise.allSettled([relaunching]);
-        if (session.context) {
-          await closeContext(session.context);
-          session.context = null;
-        }
-        fs.rmSync(profileDir, { recursive: true, force: true });
-      })().catch((err) => {
-        closing = null;
-        throw err;
-      });
+      closing = closing ?? (
+          /**
+           * Waits for a relaunch in flight to settle, closes the current
+           * context, if any, then removes the profile directory.
+           * @returns {!Promise<void>} Resolves once the context is closed and
+           *     the profile removed; rejects when the close or the removal
+           *     fails.
+           */
+          async () => {
+            // A relaunch in flight settles first, so the context it leaves in
+            // session.context is the one closed here.
+            await Promise.allSettled([relaunching]);
+            if (session.context) {
+              await closeContext(session.context);
+              session.context = null;
+            }
+            fs.rmSync(profileDir, { recursive: true, force: true });
+          })().catch((err) => {
+            closing = null;
+            throw err;
+          });
       return closing;
     },
   };
@@ -709,6 +759,11 @@ async function blockStorage(context) {
   await context.addInitScript(() => {
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
+      /**
+       * Refuses every read of window.localStorage, as a browser that blocks
+       * site data does.
+       * @throws {DOMException} SecurityError on every read.
+       */
       get() {
         throw new DOMException('Access is denied', 'SecurityError');
       },
@@ -725,6 +780,11 @@ async function blockStorage(context) {
  */
 async function failWrites(page) {
   await page.evaluate(() => {
+    /**
+     * Refuses every setItem call without storing anything, as a full quota
+     * does.
+     * @throws {DOMException} QuotaExceededError on every call.
+     */
     Storage.prototype.setItem = function() {
       throw new DOMException('Quota exceeded', 'QuotaExceededError');
     };
@@ -872,7 +932,21 @@ function readNotices(page) {
  */
 function readFields(page) {
   return page.evaluate(() => {
+    /**
+     * Finds an element by its id.
+     * @param {string} id The element id.
+     * @returns {?HTMLElement} The element, or null when none has the id.
+     */
     const byId = (id) => document.getElementById(id);
+    /**
+     * Reads a field's inline message and the input's error attributes.
+     * @param {!HTMLElement} input The field's input.
+     * @param {!HTMLElement} element The field's message element.
+     * @returns {{text: string, hidden: boolean, inputInvalid: ?string,
+     *     describedBy: ?string}} The message's text and `hidden` property,
+     *     and the input's aria-invalid and aria-describedby attributes or
+     *     null.
+     */
     const errorOf = (input, element) => ({
       text: element.textContent,
       hidden: element.hidden,
@@ -921,6 +995,12 @@ function waterButton(page, name) {
  */
 function measureOverflow(page) {
   return page.evaluate(() => {
+    /**
+     * Names an element stably for the offender list.
+     * @param {!Element} element The element.
+     * @returns {string} `tag#id` when it has an id, otherwise `tag.classes`,
+     *     or the bare tag when it has no class.
+     */
     const describe = (element) => {
       const tag = element.tagName.toLowerCase();
       if (element.id) {
@@ -1370,16 +1450,42 @@ async function runCheck({ check, run, browser, server }, body) {
     sessions: [],
     lastPage: null,
     mainScreenshot: false,
+    /**
+     * Creates a session on the spec's browser for this check's run and URL,
+     * tracked so it is closed after the body.
+     * @param {{now: (string|undefined), block: (boolean|undefined)}=} options
+     *     The createSession options.
+     * @returns {!Promise<!Object>} The session createSession returns. A
+     *     rejection is createSession's own, and nothing is tracked.
+     */
     newSession: async (options) => {
       const session = await createSession(browser, run, ctx.url, options);
       ctx.sessions.push(session);
       return session;
     },
+    /**
+     * Creates a persistent-profile session for this check's run and URL,
+     * tracked so it is closed after the body.
+     * @param {{now: (string|undefined)}=} options The createPersistentSession
+     *     options.
+     * @returns {!Promise<!Object>} The session createPersistentSession
+     *     returns. A rejection is its own, and nothing is tracked.
+     */
     newPersistentSession: async (options) => {
       const session = await createPersistentSession(run, ctx.url, options);
       ctx.sessions.push(session);
       return session;
     },
+    /**
+     * Saves a screenshot for this check's run and makes the page the one the
+     * fallback <check>.png captures while it stays open.
+     * @param {!Object} page A Playwright Page.
+     * @param {{suffix: (string|undefined), fullPage: (boolean|undefined)}=}
+     *     options The takeScreenshot options. Without `suffix` the main
+     *     <check>.png is written, so no fallback is taken.
+     * @returns {!Promise<string>} The screenshot's absolute path; rejects as
+     *     takeScreenshot does.
+     */
     screenshot: async (page, options = {}) => {
       ctx.lastPage = page;
       const file = await takeScreenshot(page, run, check, options);
