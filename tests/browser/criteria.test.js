@@ -1190,8 +1190,9 @@ const CHECKS = Object.freeze([
   },
 ]);
 
-// One browser and one static server for the whole file, so the served
-// origin stays fixed across every check, including C07's relaunch.
+// One static server for the whole file, so the served origin stays fixed
+// across every check, including C07's relaunch, and one shared browser for
+// every check not flagged `ownBrowser`.
 let browser;
 let browserVersion = null;
 let server;
