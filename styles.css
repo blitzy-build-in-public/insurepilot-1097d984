@@ -1,0 +1,304 @@
+/*
+ * Plant Parent styles: a neutral palette with a single accent, system
+ * fonts and one centred column. Hover and focus states switch instantly,
+ * with no motion, shadow or decorative imagery. The file loads no other
+ * resource: no remote stylesheet, image or font.
+ */
+
+/* ===== Tokens ===== */
+
+:root {
+  color-scheme: light;
+
+  --text: #1f2328; /* 15.8:1 on white */
+  --muted: #57606a; /* 6.39:1 on white */
+  --control-border: #6e7781; /* 4.55:1 on white */
+  --divider: #d8dee4; /* decorative row separators */
+  --surface: #f6f8fa;
+  --background: #ffffff;
+  /* The single accent: 6.34:1 on white, 5.96:1 on --surface. */
+  --accent: #2e6b47;
+  /* Darker shade of the same accent; white text on it is 8.07:1. */
+  --accent-hover: #245a3b;
+
+  --radius: 6px;
+}
+
+/* ===== Base ===== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The file's only !important, deliberately: no display rule on the list,
+   empty state or field errors may override the hidden attribute the
+   script toggles. */
+[hidden] {
+  display: none !important;
+}
+
+/* Wide content is made to wrap; html and body never clip it horizontally. */
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+h1,
+h2 {
+  font-weight: 600;
+}
+
+h1 {
+  margin-block: 0 1rem;
+  font-size: 1.5rem;
+}
+
+/* Every h2 opens a flex column whose gap spaces it from what follows. */
+h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+/* ===== Layout ===== */
+
+/* The column's children use block flow, not a flex gap: a gap would add
+   space around the live region even while it is empty. */
+.page {
+  max-width: 40rem;
+  margin-inline: auto;
+  padding-block: 1.5rem;
+  padding-inline: 1rem;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+label {
+  display: block;
+}
+
+/* ===== Controls ===== */
+
+input {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  /* Stops the intrinsic width of iOS Safari's date input from forcing
+     horizontal overflow. */
+  min-width: 0;
+  height: 2.75rem;
+  min-height: 2.75rem;
+  /* Every input, the date field included, is one 2.75rem control height.
+     The height is set rather than grown from the content because the date
+     field's own edit fields stand taller than the 1.5rem text line. The
+     padding centres that line box in the 2.75rem target, inside the 1px
+     border. */
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 1px);
+  padding-inline: 1rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--text);
+  font: inherit;
+  /* iOS Safari zooms the page when a focused input is under 16px. */
+  font-size: 1rem;
+}
+
+button[type="submit"],
+.plant__water {
+  min-height: 2.75rem;
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 1px);
+  padding-inline: 1rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+button[type="submit"] {
+  align-self: flex-start;
+  background: var(--accent);
+  color: var(--background);
+}
+
+.plant__water {
+  flex: none;
+  background: var(--background);
+  color: var(--accent);
+}
+
+@media (hover: hover) {
+  button[type="submit"]:hover {
+    border-color: var(--accent-hover);
+    background: var(--accent-hover);
+  }
+
+  .plant__water:hover {
+    background: var(--surface);
+  }
+}
+
+/* ===== Plant list ===== */
+
+.empty-state {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* index.html sets role="list" on this element: Safari with VoiceOver drops
+   list semantics from a list styled with list-style: none. */
+.plant-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding-block: 1rem;
+}
+
+/* At 25rem and narrower the column gap is the row's full width, so nothing
+   fits beside the text: Water now always wraps below it and the text keeps
+   the whole row. Wider, the 1rem gap applies and the text column beside the
+   button is wide enough for the whole date line. */
+@media (max-width: 25rem) {
+  .plant {
+    column-gap: 100%;
+  }
+}
+
+.plant + .plant {
+  border-block-start: 1px solid var(--divider);
+}
+
+/* The clip keeps every glyph's ink inside its own row, however tall a
+   stack of combining marks grows. Where overflow-clip-margin is supported,
+   its 1rem margin equals the row padding and the gap to the button, so
+   ordinary ascenders, descenders and side bearings are not cut. Where it
+   is not, the clip falls at the text box itself and can trim about 1px of
+   a glyph's antialiased edge. Either way the clip edge never reaches a
+   neighbour. */
+.plant__text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow: clip;
+  overflow-clip-margin: 1rem;
+}
+
+/* An 80-character name with no spaces breaks instead of widening the page. */
+.plant__name {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.plant__date {
+  display: block;
+  color: var(--muted);
+}
+
+/* The date is never split from its year, even under enlarged text. */
+.plant__date time {
+  white-space: nowrap;
+}
+
+/* ===== Notices and errors ===== */
+
+/* The live region stays rendered, never display: none or hidden through
+   :empty, so later changes are announced. With no padding, border or
+   background of its own it takes no space while empty. */
+.notices {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.notice {
+  margin: 0;
+  padding: 1rem;
+  border-inline-start: 4px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Spaces the notices from the form only while at least one is shown. */
+.notice:last-child {
+  margin-block-end: 1rem;
+}
+
+/* Errors add no second hue: the message text and the darker rule carry
+   the distinction, so colour is never the only signal. */
+.notice--error {
+  border-inline-start-color: var(--text);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* The 1px-thicker border is offset by 1px less padding, so the box keeps
+   its size. */
+[aria-invalid="true"] {
+  padding-block: calc((2.75rem - 1.5rem) / 2 - 2px);
+  padding-inline: calc(1rem - 1px);
+  border: 2px solid var(--text);
+}
+
+/* ===== Focus ===== */
+
+/* Chromium gives the date input's built-in picker button its own tab stop.
+   While it has focus the input matches :focus-within but not
+   :focus-visible, so the field needs the ring through both. */
+input:focus-visible,
+input[type="date"]:focus-within,
+button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* When focus scrolls a control into view, the 0.5rem margin keeps the 3px
+   ring and its 2px offset on screen. Above an input, 3rem also keeps its
+   label in view: the 1.5rem label line, the 1rem gap and that 0.5rem. */
+input,
+button {
+  scroll-margin-block: 0.5rem;
+}
+
+input {
+  scroll-margin-block-start: 3rem;
+}
+
+/* Shift+Tab enters the date field on Chromium's picker button, and focus
+   then scrolls that button rather than the field. The button is 1.25rem
+   tall and centred in the 2.75rem field, so its margins add the 0.75rem
+   that lies between it and the field's edges. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  scroll-margin-block: calc(3rem + 0.75rem) calc(0.5rem + 0.75rem);
+}

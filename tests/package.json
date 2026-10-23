@@ -1,0 +1,17 @@
+{
+  "name": "plant-parent-tests",
+  "version": "0.0.0",
+  "description": "Development-only unit and browser checks for Plant Parent; never shipped.",
+  "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "test:unit": "node --test \"unit/*.test.js\"",
+    "test:browser": "node --test --test-concurrency=1 \"browser/*.test.js\"",
+    "test": "npm run test:unit && npm run test:browser"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}
