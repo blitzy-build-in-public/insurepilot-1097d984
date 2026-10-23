@@ -7,7 +7,12 @@ does not, Firefox and Safari, and it resolves the file-mode assumptions A1
 
 ## Before you start
 
-Run the automated gates from the repository root:
+The automated gates need Node.js 22.5.0 or later with its bundled npm, and
+the same Node.js runs the server for served LAN mode below. The first three
+gates need nothing more; the next two commands install the Playwright package
+and Chromium that the browser gate drives. All of these are development tools
+and are never shipped: the app itself needs no install, build or package, and
+opens straight in a browser. Run the gates from the repository root:
 
 ```bash
 node --check app.js
@@ -34,6 +39,15 @@ runs both suites in turn.
   ```bash
   HOST=0.0.0.0 node tests/support/static-server.js 8080
   ```
+
+  - `HOST` is the address the server listens on. Unset or empty, it is
+    `127.0.0.1`, which only this computer can reach; `0.0.0.0` listens on
+    every IPv4 interface, so a phone on the same network can reach it.
+  - The port is the one optional argument, a decimal number from 0 to 65535.
+    Without it the server uses port 0: the system picks a free port, and the
+    printed URL shows it. Here it is fixed at 8080 so the phone URL is
+    predictable. An invalid port, or more than one argument, prints the usage
+    line and exits with code 1.
 
   The server prints the LAN addresses it answers on. On a phone on the same
   network, open `http://<computer LAN IP>:8080/index.html`. The computer's
@@ -109,20 +123,28 @@ Test strings, for pasting:
      focus.
 3. **Order.**
    - Steps: start fresh and add Monstera, Fern and Cactus, in that order.
-   - Expected: the rows read Monstera, Fern, Cactus from top to bottom.
+   - Expected: the rows read Monstera, Fern, Cactus from top to bottom. In
+     the storage inspector, the value of `plant-parent.plants.v1` lists the
+     entries' names in the same order: Monstera, Fern, Cactus.
 4. **Past date.**
    - Steps: set Last watered to yesterday and add `Pothos`.
    - Expected: the Pothos row shows yesterday's date, and Last watered returns
-     to today.
+     to today. In the storage inspector, the Pothos entry's `lastWatered` is
+     yesterday's date in `YYYY-MM-DD` form.
 5. **Water now.**
    - Steps: on a plant dated in the past, such as Pothos, press **Water now**.
      Then reload the page.
    - Expected: the row shows today at once, without a reload, and stays in
-     its position. After the reload it still shows today.
+     its position. After the reload it still shows today. In the storage
+     inspector, that plant's stored `lastWatered` is today's date in
+     `YYYY-MM-DD` form after the press, and still is after the reload.
 6. **No reordering.**
-   - Steps: with at least three plants dated in the past, press **Water now**
-     on the middle row, then the last, then the first.
-   - Expected: after every press the rows keep their order.
+   - Steps: with at least three plants dated in the past, note the order of
+     the rows and, in the storage inspector, the order of the stored `id`
+     values. Then press **Water now** on the middle row, then the last, then
+     the first.
+   - Expected: after every press both the rows and the stored `id` values
+     keep that order.
 7. **Persistence.**
    - Steps: note every row's name, date and position. Reload. Open the same
      file or URL in a new tab or window. Quit the browser completely, relaunch
@@ -145,9 +167,15 @@ Test strings, for pasting:
    - Expected: each sub-case shows its exact message under its field: "Enter
      a plant name" for the first two, "Name must be 80 characters or fewer"
      for the third, "Enter a date" for the fourth and "Date cannot be in the
-     future" for the fifth. No row is added, the stored value is unchanged,
-     both fields keep exactly what was typed, and focus moves to the invalid
-     field. Editing that field clears its message.
+     future" for the fifth. In the DOM inspector, the invalid field carries
+     `aria-invalid="true"` and an `aria-describedby` naming its message's
+     id: `plant-name-error` for Name, `last-watered-error` for Last watered.
+     The Accessibility inspector shows that field as invalid and described by
+     its message. No row is added, the stored value is unchanged, both fields
+     keep exactly what was typed, and focus moves to the invalid field.
+     Any edit to Name clears its message and removes both attributes. Last
+     watered does the same only once the edit changes its value, so a partly
+     entered date keeps its message until month, day and year are all entered.
 10. **Corrupt storage.**
     - Steps: in the storage inspector, set the value of
       `plant-parent.plants.v1` to `{not json` and reload. Then set it to the
@@ -202,7 +230,9 @@ record every result in the results table.
 
 ### Desktop Firefox, current, file mode: criteria 1–14
 
-- 1–9: through the UI.
+- 1–9: through the UI. Read the stored values that 3, 4, 5, 6, 8 and 9 check in
+  DevTools → Storage → Local Storage, and 9's field attributes in DevTools →
+  Inspector (or DevTools → Accessibility).
 - 10: DevTools → Storage → Local Storage, edit the value of
   `plant-parent.plants.v1`, then reload.
 - 11: open `about:config`, set `dom.storage.enabled` to `false` and reload.
@@ -220,14 +250,28 @@ record every result in the results table.
 
 - Start the server in served LAN mode and open the URL it prints in Safari on
   the phone.
-- All criteria through the UI on the device.
+- All criteria through the UI on the device. The phone has no inspector of
+  its own, so read the stored values that 3, 4, 5, 6 and 9 check, and 9's field
+  attributes, with Web Inspector from a Mac. On the phone, turn on Settings →
+  Apps → Safari → Advanced → Web Inspector (Settings → Safari → Advanced on
+  older iOS) and connect the phone to the Mac with a cable. In Safari on the
+  Mac, with Safari Settings → Advanced → "Show features for web developers"
+  on, choose the phone in the Develop menu, then the page, and use its
+  Storage and Elements tabs.
 - 7: quit Safari by swiping it away in the app switcher, then reopen it and
   the same URL.
 - 9: dates are chosen in the native picker. Confirm that the picker offers no
-  day after today. For the empty-date sub-case, clear the date with the
-  picker's reset or clear control. If the picker does let a day after today
-  be chosen, choose it and submit: the app must show "Date cannot be in the
-  future", and the Notes cell records what the picker allowed.
+  day after today. For the empty-date sub-case, type a valid name, tap Last
+  watered, tap Reset in the picker, close the picker if it stays open, and
+  confirm the field shows no date; then press **Add plant**. If the picker
+  shows no Reset control, or the field still shows a date afterwards, the
+  Notes cell records that the empty-date sub-case could not be run on that
+  iOS version and what the picker offered, and that sub-case does not count
+  as passed. iOS has no keyboard entry for a date, so no part of it can be
+  left blank and the incomplete-date variant does not apply. If the picker
+  does let a day after today be chosen, choose it and submit: the app must
+  show "Date cannot be in the future", and the Notes cell records what the
+  picker allowed.
 - 13: at the device's own width, in portrait.
 - 14 (accessible names): turn on VoiceOver (Settings → Accessibility →
   VoiceOver) and swipe to each **Water now** button. VoiceOver reads each one
@@ -278,10 +322,23 @@ highlight each item", or uses Option+Tab.
 
 ## Results
 
-Fill in each row as its criterion is run: the browser version from the
-browser's About page, the OS version or device model, the result, any notes,
+Fill in each row as its criterion is run: the browser version and the OS
+version or device model, found as listed below, then the result, any notes,
 the tester's name and the date. Record a re-run on a new row rather than
 overwriting the earlier one.
+
+- Firefox: menu button (☰) → Help → About Firefox; on macOS, Firefox →
+  About Firefox in the menu bar.
+- Edge: Settings and more (…) → Help and feedback → About Microsoft Edge,
+  or open `edge://settings/help`.
+- Safari on macOS: Safari → About Safari in the menu bar.
+- Safari on iOS: Safari has no About page and is versioned with iOS.
+  Record the version from Settings → General → About → iOS Version (iPadOS
+  Version on an iPad) in the row's version slot, prefixed `iOS` or
+  `iPadOS`, and the model from Model Name on the same screen. Do not record
+  a separate Safari version.
+- Desktop OS: on macOS, Apple menu → About This Mac; on Windows,
+  Settings → System → About.
 
 | Browser and version | OS or device | Run mode | Criterion | Result | Notes | Tester | Date |
 |---|---|---|---|---|---|---|---|
